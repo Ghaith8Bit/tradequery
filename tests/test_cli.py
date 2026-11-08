@@ -198,3 +198,12 @@ def test_tags_command(tmp_path, capsys):
     assert "no_stop_loss:" in out and "revenge_trade:" in out and "oversized:" in out
     assert cli.main(["--data-dir", str(tmp_path), "tags", "--rule", "no_stop_loss"]) == 0
     assert "overtrading" not in capsys.readouterr().out
+
+
+def test_sequences_command(tmp_path, capsys):
+    write_account(tmp_path, 1234, balance=balance_from_deals(generate_account().deals))
+    assert cli.main(["--data-dir", str(tmp_path), "sequences"]) == 0
+    out = capsys.readouterr().out
+    assert "martingale:" in out and "By depth" in out and "depth  5:" in out
+    assert cli.main(["--data-dir", str(tmp_path), "sequences", "--type", "grid", "--min-depth", "50"]) == 0
+    assert "None." in capsys.readouterr().out

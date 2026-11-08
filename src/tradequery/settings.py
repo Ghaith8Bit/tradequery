@@ -35,6 +35,9 @@ class DetectorSettings:
     overtrading_sd_multiplier: float = 2.0
     oversized_multiplier: float = 2.0
     min_history: int = 5  # trades (revenge) or trading days (overtrading) needed before judging
+    martingale_min_losses: int = 2  # losing positions before the lots grow
+    martingale_lot_multiplier: float = 1.5  # each step at least this multiple of the previous lots
+    grid_min_open: int = 3  # same-side positions open at once, each entered further against the first
     manual_magics: tuple[int, ...] = ()  # magic numbers to treat as manual although non-zero
 
 

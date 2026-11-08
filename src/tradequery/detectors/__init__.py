@@ -72,4 +72,4 @@ def run_all(trades: list[Trade], settings: Settings, cash_flows: Iterable[CashFl
     return sorted(tags, key=lambda t: (t.position_id, t.rule))
 
 
-RULES = ("revenge_trade", "overtrading", "no_stop_loss", "oversized")
+RULES = ("revenge_trade", "overtrading", "no_stop_loss", "oversized", "martingale", "grid")

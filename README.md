@@ -47,7 +47,8 @@ make inspect              # logs in, prints the account and a history summary, c
 make sync                 # saves the history to data/accounts/<login>.db (later runs: only what is new)
 make show                 # analyse the stored account (no MT5 needed)
 docker compose run --rm app metrics   # win rate, profit factor, streaks, drawdown, ... (--symbol, --magic, --since, --until)
-docker compose run --rm app tags      # detector tags with evidence (revenge, overtrading, no stop loss, oversized)
+docker compose run --rm app tags      # detector tags with evidence (revenge, overtrading, no stop loss, oversized, martingale, grid)
+docker compose run --rm app sequences # martingale and grid sequences: depth, lot multiplier, result
 ```
 
 - **Use the investor (read-only) password**, never the master password. `inspect` prints "read-only (investor)" or warns if the login can trade.
@@ -117,7 +118,8 @@ src/tradequery/
   crosscheck.py   report vs stored history, deal by deal and trade by trade
   metrics.py      named metrics with definitions: win rate, profit factor, R, streaks, drawdown, ...
   exposure.py     lots open over time: peak, average, at a given moment
-  detectors/      one rule per file, each tag with evidence; thresholds in settings.toml [detectors]
+  detectors/      one rule per file, each tag with evidence; thresholds in settings.toml [detectors];
+                  sequences.py finds martingale, grid and martingale-grid series
   pricepath.py    from one-minute bars: MAE/MFE, minutes in profit/loss, equity curve and equity drawdown
   cli.py          demo | inspect | download | import | compare | metrics | show
 docker/mt5/       Wine image and its setup script

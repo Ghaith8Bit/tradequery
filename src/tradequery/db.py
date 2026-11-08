@@ -27,11 +27,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import detectors
+from .detectors import sequences
 from .models import TRADE_TYPES, Bar, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SQL_TYPES = {"int": "INTEGER", "float": "REAL", "str": "TEXT", "datetime": "TEXT", "bool": "INTEGER"}
 
@@ -162,6 +163,16 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE TABLE tags (position_id INTEGER NOT NULL, rule TEXT NOT NULL, evidence TEXT NOT NULL, "
         "PRIMARY KEY (position_id, rule))",
         "CREATE INDEX tags_rule ON tags (rule)",
+    ),
+    4: (
+        # Martingale and grid series, and which positions (in order) belong to each.
+        "CREATE TABLE sequences (sequence_id INTEGER PRIMARY KEY, type TEXT NOT NULL, symbol TEXT NOT NULL, "
+        "side TEXT NOT NULL, depth INTEGER NOT NULL, first_lot REAL NOT NULL, max_lot REAL NOT NULL, "
+        "max_lot_multiplier REAL NOT NULL, max_open INTEGER NOT NULL, start_utc TEXT NOT NULL, "
+        "end_utc TEXT NOT NULL, net_pnl REAL NOT NULL, is_win INTEGER NOT NULL)",
+        "CREATE TABLE sequence_trades (sequence_id INTEGER NOT NULL, position_id INTEGER NOT NULL, "
+        "level INTEGER NOT NULL, PRIMARY KEY (sequence_id, position_id))",
+        "CREATE INDEX sequence_trades_position ON sequence_trades (position_id)",
     ),
 }
 
@@ -404,8 +415,38 @@ def rebuild_derived(conn: sqlite3.Connection, settings: Settings) -> tuple[list[
     trades = derive_trades(closed, flows + stray_exits, settings, initial_balance=row[0] if row else 0.0)
     _write_rows(conn, "cash_flows", flows, replace_all=True)
     _write_rows(conn, "trades", trades, replace_all=True)
-    save_tags(conn, detectors.run_all(trades, settings, flows))
+    found = sequences.find_sequences(trades, settings.detectors)
+    save_sequences(conn, found)
+    save_tags(conn, detectors.run_all(trades, settings, flows) + sequences.sequence_tags(found, trades))
     return trades, flows
+
+
+def save_sequences(conn: sqlite3.Connection, found) -> None:
+    """Replace every stored sequence (detectors.sequences.Sequence) and its members."""
+    conn.execute("DELETE FROM sequence_trades")
+    conn.execute("DELETE FROM sequences")
+    conn.executemany(
+        "INSERT INTO sequences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(s.sequence_id, s.type, s.symbol, s.side, s.depth, s.first_lot, s.max_lot, s.max_lot_multiplier,
+          s.max_open, format_time(s.start_utc), format_time(s.end_utc), s.net, int(s.is_win)) for s in found],
+    )
+    conn.executemany(
+        "INSERT INTO sequence_trades VALUES (?, ?, ?)",
+        [(s.sequence_id, pid, level) for s in found for level, pid in enumerate(s.position_ids, start=1)],
+    )
+
+
+def load_sequences(conn: sqlite3.Connection) -> list:
+    """Stored sequences (detectors.sequences.Sequence), by start time."""
+    members: dict[int, list[int]] = {}
+    for sid, pid in conn.execute("SELECT sequence_id, position_id FROM sequence_trades ORDER BY sequence_id, level"):
+        members.setdefault(sid, []).append(pid)
+    return [
+        sequences.Sequence(row["sequence_id"], row["type"], row["symbol"], row["side"],
+                           tuple(members.get(row["sequence_id"], ())), row["first_lot"], row["max_lot"],
+                           row["max_open"], parse_time(row["start_utc"]), parse_time(row["end_utc"]), row["net_pnl"])
+        for row in conn.execute("SELECT * FROM sequences ORDER BY sequence_id")
+    ]
 
 
 def save_tags(conn: sqlite3.Connection, tags) -> None:

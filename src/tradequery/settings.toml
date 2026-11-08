@@ -51,5 +51,15 @@ oversized_multiplier = 2.0
 # trades (revenge) or trading days (overtrading) needed before judging at all
 min_history = 5
 
+# martingale: after this many losing positions, each next position on the same
+# symbol has lots at least this multiple of the previous one. A position counts as
+# losing when it closed at a loss, or is still open at a worse price than the new entry.
+martingale_min_losses = 2
+martingale_lot_multiplier = 1.5
+
+# grid: at least this many same-side positions open at once, each entered further
+# against the first
+grid_min_open = 3
+
 # magic numbers to treat as manual trades although they are not 0
 manual_magics = []

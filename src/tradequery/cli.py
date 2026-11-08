@@ -6,7 +6,8 @@
   tradequery import FILE load an MT5 HTML history report into data/accounts/<login>.db
   tradequery compare FILE check a report against the stored (synced) history
   tradequery metrics     named metrics (win rate, profit factor, streaks, drawdown, ...)
-  tradequery tags        detector tags with evidence (revenge, overtrading, no stop loss, oversized)
+  tradequery tags        detector tags with evidence (revenge, overtrading, no stop loss, oversized, ...)
+  tradequery sequences   martingale and grid sequences: depth, lot multiplier, result
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -468,6 +469,51 @@ def cmd_tags(args) -> int:
     return 0
 
 
+def cmd_sequences(args) -> int:
+    login = _pick_login(args)
+    conn = db.connect(db.db_path(login, args.data_dir), read_only=True)
+    try:
+        found = db.load_sequences(conn)
+        trade_count = len(db.load_trades(conn))
+    finally:
+        conn.close()
+    if args.type:
+        found = [s for s in found if s.type == args.type]
+    found = [s for s in found if s.depth >= args.min_depth]
+    print(f"Account {login}: {len(found)} sequences" + (f" of type {args.type}" if args.type else "")
+          + (f" with depth {args.min_depth}+" if args.min_depth > 1 else ""))
+    if not found:
+        print("None. (Run make sync or import a report to detect sequences.)")
+        return 0
+    in_sequences = sum(s.depth for s in found)
+    print(f"  {in_sequences} of {trade_count} closed trades are part of one")
+    for kind in sorted({s.type for s in found}):
+        mine = [s for s in found if s.type == kind]
+        wins = [s for s in mine if s.is_win]
+        print(f"  {kind}: {len(mine)} ({len(wins)} won {sum(s.net for s in wins):,.2f}; "
+              f"{len(mine) - len(wins)} lost {sum(s.net for s in mine if not s.is_win):,.2f})")
+    depths = {}
+    for s in found:
+        depths.setdefault(s.depth, []).append(s)
+    print("\nBy depth (positions in the sequence):")
+    for depth in sorted(depths):
+        mine = depths[depth]
+        wins = sum(1 for s in mine if s.is_win)
+        print(f"  depth {depth:>2}: {len(mine):>4} sequences, {wins} won, net {sum(s.net for s in mine):>10,.2f}, "
+              f"max multiplier {max(s.max_lot_multiplier for s in mine):g}x")
+    key = {"depth": lambda s: (-s.depth, s.net), "net": lambda s: s.net, "time": lambda s: s.start_utc}[args.sort]
+    print(f"\nSequences by {args.sort} (first {args.limit}):")
+    print(f"  {'#':>4} {'type':<16} {'start (UTC)':<16} {'depth':>5} {'lots':>12} {'mult':>6} {'open':>4} {'net':>11}")
+    for s in sorted(found, key=key)[: args.limit]:
+        lots = f"{s.first_lot:g}->{s.max_lot:g}"
+        print(f"  {s.sequence_id:>4} {s.type:<16} {_fmt_time(s.start_utc):<16} {s.depth:>5} {lots:>12} "
+              f"{s.max_lot_multiplier:>5g}x {s.max_open:>4} {s.net:>11,.2f}")
+    deep_wins = [s for s in found if s.is_win and s.depth >= 5]
+    if deep_wins:
+        print(f"\n{len(deep_wins)} sequences reached depth 5+ and still closed in profit: the risk taken does not show in their result.")
+    return 0
+
+
 def cmd_compare(args) -> int:
     report = parse_report(args.report, load_settings().clock)
     conn = db.connect(db.db_path(report.login, args.data_dir), read_only=True)
@@ -591,6 +637,13 @@ def main(argv=None) -> int:
     tg.add_argument("--rule", choices=detectors.RULES, help="only this rule")
     tg.add_argument("--examples", type=int, default=5, help="how many tagged trades to show per rule")
     tg.set_defaults(func=cmd_tags)
+    sq = sub.add_parser("sequences", help="martingale and grid sequences with depth, lot multiplier and result")
+    sq.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
+    sq.add_argument("--type", choices=("martingale", "grid", "martingale_grid"), help="only this type")
+    sq.add_argument("--min-depth", type=int, default=1, help="only sequences with at least this many positions")
+    sq.add_argument("--sort", choices=("depth", "net", "time"), default="depth", help="order of the list")
+    sq.add_argument("--limit", type=int, default=15, help="how many sequences to list")
+    sq.set_defaults(func=cmd_sequences)
     comp = sub.add_parser("compare", help="check an MT5 HTML report against the stored (synced) history")
     comp.add_argument("report", help="path to the ReportHistory-<login>.html file")
     comp.add_argument("--show", type=int, default=20, help="how many differences to print")
