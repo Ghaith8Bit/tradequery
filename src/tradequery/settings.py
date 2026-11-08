@@ -31,6 +31,7 @@ class Settings:
     break_even_tolerance: float
     # Trading sessions as {name: (start_hour, end_hour)} in UTC, end exclusive.
     sessions: dict[str, tuple[int, int]] = field(default_factory=dict)
+    breakeven_breaks_streak: bool = False
 
 
 def load_settings(path: Path | str | None = None) -> Settings:
@@ -45,6 +46,7 @@ def load_settings(path: Path | str | None = None) -> Settings:
         local_timezone=time.get("local_timezone", "UTC"),
         break_even_tolerance=float(raw.get("metrics", {}).get("break_even_tolerance", 0.0)),
         sessions={n: (int(b[0]), int(b[1])) for n, b in raw.get("sessions", {}).items()},
+        breakeven_breaks_streak=bool(raw.get("metrics", {}).get("breakeven_breaks_streak", False)),
     )
 
 

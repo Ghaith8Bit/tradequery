@@ -177,3 +177,15 @@ def test_latest_deal_time_is_the_newest_stored_deal(tmp_path):
         db.upsert_deals(conn, deals)
     assert db.latest_deal_time(conn) == max(d.time_utc for d in deals)
     conn.close()
+
+
+def test_metrics_command_on_a_stored_account(tmp_path, capsys):
+    write_account(tmp_path, 1234, balance=balance_from_deals(generate_account().deals))
+    assert cli.main(["--data-dir", str(tmp_path), "metrics"]) == 0
+    out = capsys.readouterr().out
+    assert "Closed trades" in out and "48" in out
+    assert "Win rate" in out and "Profit factor" in out and "Max drawdown" in out
+    assert "Deposits / withdrawals" in out and "12,000.00 / -500.00" in out
+    capsys.readouterr()
+    assert cli.main(["--data-dir", str(tmp_path), "metrics", "--symbol", "NOPE"]) == 0
+    assert "No closed trades match." in capsys.readouterr().out

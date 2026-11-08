@@ -5,6 +5,7 @@
   tradequery download    save account, deals and symbol specs to data/accounts/<login>.db
   tradequery import FILE load an MT5 HTML history report into data/accounts/<login>.db
   tradequery compare FILE check a report against the stored (synced) history
+  tradequery metrics     named metrics (win rate, profit factor, streaks, drawdown, ...)
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -22,7 +23,7 @@ from pathlib import Path
 from . import mt5 as mt5_client
 from .mt5 import Mt5Error
 from .settings import CredentialsError, load_credentials, load_settings
-from . import db
+from . import db, metrics
 from .crosscheck import compare
 from .importers.mt5_report import ReportError, parse_report
 from .synthetic import generate_account
@@ -244,6 +245,108 @@ def cmd_show(args) -> int:
     return 0 if ok else 1
 
 
+def _money(v) -> str:
+    return "n/a" if v is None else f"{v:,.2f}"
+
+
+def _pct(v) -> str:
+    return "n/a" if v is None else f"{v * 100:.2f}%"
+
+
+def _num(v, digits=2) -> str:
+    return "n/a" if v is None else f"{v:.{digits}f}"
+
+
+def _parse_day(text: str | None) -> datetime | None:
+    return datetime.strptime(text, "%Y-%m-%d").replace(tzinfo=timezone.utc) if text else None
+
+
+def cmd_metrics(args) -> int:
+    login = _pick_login(args)
+    conn = db.connect(db.db_path(login, args.data_dir), read_only=True)
+    try:
+        account = db.load_account(conn)
+        trades = db.load_trades(conn)
+        flows = db.load_cash_flows(conn)
+        specs = {s["symbol"]: s for s in db.load_symbols(conn)}
+    finally:
+        conn.close()
+    start, end = _parse_day(args.since), _parse_day(args.until)
+    if end:
+        end += timedelta(days=1)  # --until is inclusive
+    chosen = metrics.filter_trades(trades, symbol=args.symbol, magic=args.magic, start=start, end=end)
+    chosen_flows = [f for f in flows if (not start or f.time_utc >= start) and (not end or f.time_utc < end)]
+    m = metrics.compute_metrics(
+        chosen, chosen_flows, opening_balance=account["opening_balance"] if not start else 0.0,
+        symbol_specs=specs, breakeven_breaks_streak=load_settings().breakeven_breaks_streak,
+    )
+    currency = account.get("currency") or ""
+    scope = [f"symbol {args.symbol}" if args.symbol else "", f"magic {args.magic}" if args.magic is not None else "",
+             f"from {args.since}" if args.since else "", f"to {args.until}" if args.until else ""]
+    print(f"Account {login} ({currency}): {', '.join(s for s in scope if s) or 'all closed trades'}")
+    if not chosen:
+        print("No closed trades match.")
+        return 0
+    ci = m["win_rate_ci95"]
+    lines = [
+        ("Results", None),
+        ("Closed trades", f"{m['trade_count']}"),
+        ("Win rate", f"{_pct(m['win_rate'])}  (95% range {_pct(ci[0])} to {_pct(ci[1])})"),
+        ("Net profit", _money(m["net_profit"])),
+        ("Gross profit / loss", f"{_money(m['gross_profit'])} / {_money(m['gross_loss'])}"),
+        ("Profit factor", _num(m["profit_factor"])),
+        ("Expectancy per trade", _money(m["expectancy"])),
+        ("Avg hold (all / wins / losses)", f"{_num(m['avg_hold_minutes'], 0)} / {_num(m['avg_hold_minutes_winners'], 0)}"
+                                           f" / {_num(m['avg_hold_minutes_losers'], 0)} min"),
+        ("Costs", None),
+        ("Swap total", f"{_money(m['swap_total'])}  ({_pct(m['swap_share'])} of gross profit)"),
+        ("Commission total", _money(m["commission_total"])),
+        ("Risk", None),
+    ]
+    if m["avg_r"] is None:
+        lines.append(("R-multiples", f"n/a: none of the {m['trade_count']} trades had a stop loss at entry"))
+    else:
+        lines += [("Average R / total R", f"{_num(m['avg_r'])} / {_num(m['total_r'])}"
+                                          f"  ({m['r_excluded']} trades without a stop loss left out)"),
+                  ("Planned risk-reward", _num(m["planned_rr"]))]
+    episodes = metrics.drawdown_episodes(chosen)
+    worst = max(episodes, key=lambda e: e.depth, default=None)
+    lines += [
+        ("Max drawdown (closed trades)", f"{_money(m['max_drawdown'])}  ({_pct(m['max_drawdown_pct'])} of the balance at the peak)"),
+    ]
+    if worst:
+        recovered = _fmt_time(worst.recovery_time) if worst.recovery_time else "not recovered"
+        start_text = _fmt_time(worst.peak_time) if worst.peak_time else "start of history"
+        lines.append(("  worst episode", f"peak {start_text}, trough {_fmt_time(worst.trough_time)}, "
+                                         f"{recovered}; {len(worst.position_ids)} trades to the trough"))
+    runs = metrics.streaks(chosen, load_settings().breakeven_breaks_streak)
+    longest_loss = max((r for r in runs if r.kind == "loss"), key=lambda r: r.length, default=None)
+    lines += [
+        ("Streaks", None),
+        ("Longest win / loss streak", f"{m['max_win_streak']} / {m['max_loss_streak']}"),
+        ("Current streak", f"{m['current_streak']:+d}" if m["current_streak"] else "0"),
+        ("Average streak length", _num(m["avg_streak_length"])),
+    ]
+    if longest_loss:
+        lines.append(("  longest losing streak", f"{_fmt_time(longest_loss.start)} to {_fmt_time(longest_loss.end)}, "
+                                                 f"net {_money(longest_loss.net)}"))
+    lines += [
+        ("Money in and out", None),
+        ("Deposits / withdrawals", f"{_money(m['total_deposits'])} / {_money(m['total_withdrawals'])}"),
+        ("Net deposits", _money(m["net_deposits"])),
+    ]
+    if m["credits_and_bonuses"]:
+        lines.append(("Credits and bonuses", _money(m["credits_and_bonuses"])))
+    if not start and account["opening_balance"]:
+        lines.append(("Balance before the history", _money(account["opening_balance"])))
+    lines.append(("Return (simple)", f"{_pct(m['return_pct'])}  of opening balance + deposits"))
+    for label, value in lines:
+        print(f"\n{label}" if value is None else f"  {label:<32} {value}")
+    print("\nDrawdown here uses closed trades only, with deposits and withdrawals removed;"
+          " floating losses of open positions are not included.")
+    return 0
+
+
 def cmd_compare(args) -> int:
     report = parse_report(args.report, load_settings().clock)
     conn = db.connect(db.db_path(report.login, args.data_dir), read_only=True)
@@ -354,6 +457,13 @@ def main(argv=None) -> int:
     imp = sub.add_parser("import", help="load an MT5 HTML history report into the account's database")
     imp.add_argument("report", help="path to the ReportHistory-<login>.html file")
     imp.set_defaults(func=cmd_import)
+    met = sub.add_parser("metrics", help="named metrics for a stored account")
+    met.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
+    met.add_argument("--symbol", help="only this symbol")
+    met.add_argument("--magic", type=int, help="only this magic number (0 = manual trades)")
+    met.add_argument("--since", help="first day, YYYY-MM-DD (UTC, by close time)")
+    met.add_argument("--until", help="last day, YYYY-MM-DD (UTC, inclusive)")
+    met.set_defaults(func=cmd_metrics)
     comp = sub.add_parser("compare", help="check an MT5 HTML report against the stored (synced) history")
     comp.add_argument("report", help="path to the ReportHistory-<login>.html file")
     comp.add_argument("--show", type=int, default=20, help="how many differences to print")

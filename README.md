@@ -46,6 +46,7 @@ make mt5-setup            # once: Wine prefix, Windows Python, MT5 terminal (10-
 make inspect              # logs in, prints the account and a history summary, changes nothing
 make sync                 # saves the history to data/accounts/<login>.db (later runs: only what is new)
 make show                 # analyse the stored account (no MT5 needed)
+docker compose run --rm app metrics   # win rate, profit factor, streaks, drawdown, ... (--symbol, --magic, --since, --until)
 ```
 
 - **Use the investor (read-only) password**, never the master password. `inspect` prints "read-only (investor)" or warns if the login can trade.
@@ -111,7 +112,8 @@ src/tradequery/
   mt5.py          read from the MT5 terminal (runs only inside Wine)
   importers/      MT5 HTML report importer
   crosscheck.py   report vs stored history, deal by deal and trade by trade
-  cli.py          demo | inspect | download | import | compare | show
+  metrics.py      named metrics with definitions: win rate, profit factor, R, streaks, drawdown, ...
+  cli.py          demo | inspect | download | import | compare | metrics | show
 docker/mt5/       Wine image and its setup script
 tests/            unit tests (synthetic data and a made-up report; no real accounts)
 ```

@@ -17,6 +17,9 @@ local_timezone = "Asia/Damascus"
 # A trade whose net profit is within this amount (account currency) of zero is
 # break-even: not a win, not a loss, and ignored by streaks by default.
 break_even_tolerance = 0.0
+# Streaks of wins or losses: false = a break-even trade is skipped (the streak
+# goes on through it); true = a break-even trade ends the streak.
+breakeven_breaks_streak = false
 
 [sessions]
 # Trading sessions as [start, end) hours in UTC. A trade is labeled with every
