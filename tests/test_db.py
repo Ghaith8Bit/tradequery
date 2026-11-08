@@ -31,7 +31,7 @@ def test_one_database_file_per_account(tmp_path):
 
 def test_schema_has_every_table_and_a_version(conn):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    assert tables == {"accounts", "symbols", "deals", "cash_flows", "trades", "bars"}
+    assert tables == {"accounts", "symbols", "deals", "cash_flows", "trades", "bars", "tags"}
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
 
 
@@ -146,6 +146,7 @@ def test_a_version_1_database_upgrades_in_place_even_when_opened_read_only(tmp_p
     with conn:
         db.upsert_deals(conn, deals)
         conn.execute("DROP TABLE bars")
+        conn.execute("DROP TABLE tags")
         conn.execute("PRAGMA user_version = 1")  # what an older TradeQuery left behind
     conn.close()
     ro = db.connect(path, read_only=True)

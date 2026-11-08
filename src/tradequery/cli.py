@@ -6,6 +6,7 @@
   tradequery import FILE load an MT5 HTML history report into data/accounts/<login>.db
   tradequery compare FILE check a report against the stored (synced) history
   tradequery metrics     named metrics (win rate, profit factor, streaks, drawdown, ...)
+  tradequery tags        detector tags with evidence (revenge, overtrading, no stop loss, oversized)
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -25,7 +26,7 @@ from .mt5 import Mt5Error
 from .settings import CredentialsError, load_credentials, load_settings
 from dataclasses import dataclass, field
 
-from . import db, metrics, pricepath
+from . import db, detectors, metrics, pricepath
 from .crosscheck import compare
 from .importers.mt5_report import ReportError, parse_report
 from .synthetic import generate_account
@@ -442,6 +443,31 @@ def cmd_metrics(args) -> int:
     return 0
 
 
+def cmd_tags(args) -> int:
+    login = _pick_login(args)
+    conn = db.connect(db.db_path(login, args.data_dir), read_only=True)
+    try:
+        tags = db.load_tags(conn, args.rule)
+        trades = {t.position_id: t for t in db.load_trades(conn)}
+    finally:
+        conn.close()
+    print(f"Account {login}: {len(trades)} closed trades")
+    rules = [args.rule] if args.rule else list(detectors.RULES)
+    for rule in rules:
+        mine = [t for t in tags if t.rule == rule]
+        share = f"{len(mine) / len(trades) * 100:.1f}%" if trades else "n/a"
+        print(f"\n{rule}: {len(mine)} trades ({share})")
+        for tag in mine[: args.examples]:
+            t = trades.get(tag.position_id)
+            when = _fmt_time(t.open_time_utc) if t else "?"
+            print(f"  #{tag.position_id}  {when}  {t.lots if t else '?'} lots  net {t.net_profit if t else '?'}: {tag.evidence}")
+        if len(mine) > args.examples:
+            print(f"  ... and {len(mine) - args.examples} more (--examples N to show more)")
+    if not tags and not args.rule:
+        print("\nNo tags stored. Run make sync (or import a report) to run the detectors.")
+    return 0
+
+
 def cmd_compare(args) -> int:
     report = parse_report(args.report, load_settings().clock)
     conn = db.connect(db.db_path(report.login, args.data_dir), read_only=True)
@@ -560,6 +586,11 @@ def main(argv=None) -> int:
     met.add_argument("--since", help="first day, YYYY-MM-DD (UTC, by close time)")
     met.add_argument("--until", help="last day, YYYY-MM-DD (UTC, inclusive)")
     met.set_defaults(func=cmd_metrics)
+    tg = sub.add_parser("tags", help="detector tags (revenge, overtrading, no stop loss, oversized) with evidence")
+    tg.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
+    tg.add_argument("--rule", choices=detectors.RULES, help="only this rule")
+    tg.add_argument("--examples", type=int, default=5, help="how many tagged trades to show per rule")
+    tg.set_defaults(func=cmd_tags)
     comp = sub.add_parser("compare", help="check an MT5 HTML report against the stored (synced) history")
     comp.add_argument("report", help="path to the ReportHistory-<login>.html file")
     comp.add_argument("--show", type=int, default=20, help="how many differences to print")

@@ -28,3 +28,28 @@ breakeven_breaks_streak = false
 asia = [0, 8]
 london = [7, 16]
 new_york = [12, 21]
+
+[detectors]
+# Starting thresholds from the build plan; calibrate them on real data.
+# A trade with a non-zero magic number is treated as automated (an EA), and the
+# behavioural rules (revenge, overtrading) only run on manual trades.
+
+# revenge_trade: opened within this many minutes of a losing close ...
+revenge_window_minutes = 15
+# ... with lots at least this multiple of the median lots of the previous trades
+revenge_lot_multiplier = 1.5
+revenge_median_lookback = 20
+
+# overtrading: trades after the day's count passes mean + N standard deviations
+# of the daily counts over the previous trading days in this many calendar days
+overtrading_lookback_days = 30
+overtrading_sd_multiplier = 2.0
+
+# oversized: lots per 1,000 of balance above this multiple of the account median
+oversized_multiplier = 2.0
+
+# trades (revenge) or trading days (overtrading) needed before judging at all
+min_history = 5
+
+# magic numbers to treat as manual trades although they are not 0
+manual_magics = []

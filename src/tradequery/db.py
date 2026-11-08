@@ -26,11 +26,12 @@ from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import detectors
 from .models import TRADE_TYPES, Bar, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SQL_TYPES = {"int": "INTEGER", "float": "REAL", "str": "TEXT", "datetime": "TEXT", "bool": "INTEGER"}
 
@@ -154,6 +155,13 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE TABLE bars (symbol TEXT NOT NULL, time_utc TEXT NOT NULL, open REAL NOT NULL, "
         "high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL, spread INTEGER NOT NULL, "
         "PRIMARY KEY (symbol, time_utc)) WITHOUT ROWID",
+    ),
+    3: (
+        # Detector tags, one row per position and rule, with a short evidence sentence.
+        # Rebuilt from the trades on every sync or import.
+        "CREATE TABLE tags (position_id INTEGER NOT NULL, rule TEXT NOT NULL, evidence TEXT NOT NULL, "
+        "PRIMARY KEY (position_id, rule))",
+        "CREATE INDEX tags_rule ON tags (rule)",
     ),
 }
 
@@ -396,4 +404,20 @@ def rebuild_derived(conn: sqlite3.Connection, settings: Settings) -> tuple[list[
     trades = derive_trades(closed, flows + stray_exits, settings, initial_balance=row[0] if row else 0.0)
     _write_rows(conn, "cash_flows", flows, replace_all=True)
     _write_rows(conn, "trades", trades, replace_all=True)
+    save_tags(conn, detectors.run_all(trades, settings, flows))
     return trades, flows
+
+
+def save_tags(conn: sqlite3.Connection, tags) -> None:
+    """Replace every stored tag with these (detectors.Tag rows)."""
+    conn.execute("DELETE FROM tags")
+    conn.executemany("INSERT INTO tags (position_id, rule, evidence) VALUES (?, ?, ?)",
+                     [(t.position_id, t.rule, t.evidence) for t in tags])
+
+
+def load_tags(conn: sqlite3.Connection, rule: str | None = None) -> list:
+    """Stored tags (detectors.Tag), optionally of one rule, by position."""
+    query, params = "SELECT position_id, rule, evidence FROM tags", ()
+    if rule:
+        query, params = query + " WHERE rule = ?", (rule,)
+    return [detectors.Tag(*row) for row in conn.execute(query + " ORDER BY position_id, rule", params)]

@@ -189,3 +189,12 @@ def test_metrics_command_on_a_stored_account(tmp_path, capsys):
     capsys.readouterr()
     assert cli.main(["--data-dir", str(tmp_path), "metrics", "--symbol", "NOPE"]) == 0
     assert "No closed trades match." in capsys.readouterr().out
+
+
+def test_tags_command(tmp_path, capsys):
+    write_account(tmp_path, 1234, balance=balance_from_deals(generate_account().deals))
+    assert cli.main(["--data-dir", str(tmp_path), "tags", "--examples", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "no_stop_loss:" in out and "revenge_trade:" in out and "oversized:" in out
+    assert cli.main(["--data-dir", str(tmp_path), "tags", "--rule", "no_stop_loss"]) == 0
+    assert "overtrading" not in capsys.readouterr().out

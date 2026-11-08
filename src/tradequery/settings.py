@@ -25,6 +25,20 @@ def data_dir() -> Path:
 
 
 @dataclass(frozen=True)
+class DetectorSettings:
+    """Thresholds for the detectors (see settings.toml [detectors])."""
+
+    revenge_window_minutes: float = 15
+    revenge_lot_multiplier: float = 1.5
+    revenge_median_lookback: int = 20
+    overtrading_lookback_days: int = 30
+    overtrading_sd_multiplier: float = 2.0
+    oversized_multiplier: float = 2.0
+    min_history: int = 5  # trades (revenge) or trading days (overtrading) needed before judging
+    manual_magics: tuple[int, ...] = ()  # magic numbers to treat as manual although non-zero
+
+
+@dataclass(frozen=True)
 class Settings:
     clock: ServerClock
     local_timezone: str
@@ -32,6 +46,7 @@ class Settings:
     # Trading sessions as {name: (start_hour, end_hour)} in UTC, end exclusive.
     sessions: dict[str, tuple[int, int]] = field(default_factory=dict)
     breakeven_breaks_streak: bool = False
+    detectors: DetectorSettings = field(default_factory=DetectorSettings)
 
 
 def load_settings(path: Path | str | None = None) -> Settings:
@@ -47,7 +62,18 @@ def load_settings(path: Path | str | None = None) -> Settings:
         break_even_tolerance=float(raw.get("metrics", {}).get("break_even_tolerance", 0.0)),
         sessions={n: (int(b[0]), int(b[1])) for n, b in raw.get("sessions", {}).items()},
         breakeven_breaks_streak=bool(raw.get("metrics", {}).get("breakeven_breaks_streak", False)),
+        detectors=_detector_settings(raw.get("detectors", {})),
     )
+
+
+def _detector_settings(raw: dict) -> DetectorSettings:
+    defaults = DetectorSettings()
+    values = {}
+    for name in DetectorSettings.__dataclass_fields__:
+        if name in raw:
+            default = getattr(defaults, name)
+            values[name] = tuple(int(m) for m in raw[name]) if isinstance(default, tuple) else type(default)(raw[name])
+    return DetectorSettings(**values)
 
 
 class CredentialsError(ValueError):
