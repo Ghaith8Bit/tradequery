@@ -31,7 +31,7 @@ def test_one_database_file_per_account(tmp_path):
 
 def test_schema_has_every_table_and_a_version(conn):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    assert tables == {"accounts", "symbols", "deals", "cash_flows", "trades"}
+    assert tables == {"accounts", "symbols", "deals", "cash_flows", "trades", "bars"}
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
 
 
@@ -137,3 +137,29 @@ def test_a_failed_sync_leaves_the_database_unchanged(conn):
             db.upsert_deals(conn, deals)
             raise RuntimeError("terminal disconnected")
     assert len(db.load_deals(conn)) == 10
+
+
+def test_a_version_1_database_upgrades_in_place_even_when_opened_read_only(tmp_path):
+    path = db.db_path(1, tmp_path)
+    conn = db.connect(path)
+    deals = generate_account().deals
+    with conn:
+        db.upsert_deals(conn, deals)
+        conn.execute("DROP TABLE bars")
+        conn.execute("PRAGMA user_version = 1")  # what an older TradeQuery left behind
+    conn.close()
+    ro = db.connect(path, read_only=True)
+    assert ro.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    assert db.load_deals(ro) == deals and db.load_bars(ro) == {}
+    ro.close()
+
+
+def test_bars_survive_a_save_and_load(conn):
+    from tradequery.models import Bar
+    t = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
+    bars = [Bar("XAUUSD", t, 2000.0, 2001.5, 1999.0, 2001.0, 12), Bar("XAUUSD", t.replace(minute=1), 2001.0, 2002.0, 2000.5, 2001.5, 10)]
+    with conn:
+        db.save_bars(conn, bars)
+        db.save_bars(conn, bars[:1])  # re-saving replaces, never duplicates
+    assert db.load_bars(conn) == {"XAUUSD": bars}
+    assert db.bar_count(conn, "XAUUSD", t, t.replace(minute=5)) == 2

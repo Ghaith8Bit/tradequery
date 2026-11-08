@@ -132,3 +132,45 @@ def test_end_to_end_from_fake_terminal_to_checked_balance():
     assert trades[0].balance_after == 1495.75
     # MT5's balance already includes the open position's entry commission.
     assert balance_from_deals(deals) == 1494.75
+
+
+def _minute_rows(start_server, minutes):
+    base = epoch(*start_server)
+    return [dict(time=base + 60 * i, open=1.0, high=2.0, low=0.5, close=1.5, spread=10) for i in range(minutes)]
+
+
+def test_bars_are_asked_in_server_time_and_come_back_in_utc():
+    fake = FakeMt5(rates={"XAUUSD": _minute_rows((2026, 7, 15, 12), 3)})  # server time, UTC+3 in July
+    start = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 7, 15, 9, 1, tzinfo=timezone.utc)
+    bars = mt5_client.fetch_bars(fake, CLOCK, "XAUUSD", start, end, sleep=lambda s: None)
+    assert [b.time_utc for b in bars] == [start, end]
+    assert (bars[0].low, bars[0].close, bars[0].spread) == (0.5, 1.5, 10)
+    assert fake.rate_requests[0][2] == datetime(2026, 7, 15, 12, 0, tzinfo=timezone.utc)
+
+
+def test_missing_bars_are_retried_then_accepted_as_none():
+    naps = []
+    start = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
+    assert mt5_client.fetch_bars(FakeMt5(), CLOCK, "XAUUSD", start, start, sleep=naps.append) == []
+    assert naps == [2, 2]
+    broken = FakeMt5()
+    broken.copy_rates_range = lambda *a: None
+    with pytest.raises(Mt5Error, match="M1 bars"):
+        mt5_client.fetch_bars(broken, CLOCK, "XAUUSD", start, start, tries=1)
+
+
+def test_sync_fetches_bars_once_and_then_uses_the_stored_ones(tmp_path):
+    from tradequery import cli, db
+    fake = FakeMt5(deals=[ENTRY, EXIT], orders=ORDERS, rates={"XAUUSD": _minute_rows((2026, 7, 15, 12), 151)})
+    deals = mt5_client.fetch_deals(fake, CLOCK)
+    path = db.db_path(1, tmp_path)
+    first = cli.fetch_missing_bars(fake, CLOCK, path, deals)
+    assert (first.fetched, first.cached, len(first.bars)) == (1, 0, 151)  # 09:00 to 11:30 UTC
+    conn = db.connect(path)
+    with conn:
+        db.upsert_deals(conn, deals)
+        db.save_bars(conn, first.bars)
+    conn.close()
+    again = cli.fetch_missing_bars(fake, CLOCK, path, [])
+    assert (again.fetched, again.cached, again.bars) == (0, 1, [])

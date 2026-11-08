@@ -21,7 +21,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from .settings import Mt5Credentials
-from .models import Deal
+from .models import Bar, Deal
 from .timeutil import ServerClock
 
 WIDE_START = datetime(2000, 1, 1, tzinfo=timezone.utc)
@@ -197,6 +197,33 @@ def fetch_symbol_specs(mt5, names) -> list[dict]:
         else:
             specs.append({field: getattr(info, field, None) for field in SYMBOL_SPEC_FIELDS})
     return specs
+
+
+def fetch_bars(
+    mt5, clock: ServerClock, symbol: str, start: datetime, end: datetime, *, tries: int = 3, sleep=time.sleep
+) -> list[Bar]:
+    """One-minute bars of a symbol with start <= bar time <= end (aware UTC in, aware UTC out).
+
+    The library takes and returns broker server time encoded as UTC, like deal
+    times. The terminal may still be downloading history from the server, so an
+    empty answer is retried a few times. Bars beyond the broker's history depth
+    simply do not come back; callers treat those trades as having no price path.
+    """
+    as_server = lambda t: clock.from_utc(t).replace(tzinfo=timezone.utc)  # noqa: E731
+    rates = None
+    for attempt in range(tries):
+        rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M1, as_server(start), as_server(end))
+        if rates is not None and len(rates):
+            break
+        if attempt < tries - 1:
+            sleep(2)
+    if rates is None:
+        raise Mt5Error(f"could not read M1 bars for {symbol}: {mt5.last_error()}")
+    return [
+        Bar(symbol, clock.from_mt5_epoch(int(r["time"])), float(r["open"]), float(r["high"]),
+            float(r["low"]), float(r["close"]), int(r["spread"]))
+        for r in rates
+    ]
 
 
 def list_symbol_names(mt5) -> list[str]:

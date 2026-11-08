@@ -136,7 +136,7 @@ def test_second_download_reads_only_from_a_day_before_the_newest_deal(tmp_path, 
     asked = []
 
     def terminal(batch):
-        def read(since_for=None):
+        def read(since_for=None, then=None):
             asked.append(since_for(1234))
             return account, batch, [], []
         return read
@@ -159,7 +159,7 @@ def test_full_flag_rereads_everything(tmp_path, monkeypatch):
     account = dict(ACCOUNT, balance=balance_from_deals(deals))
     asked = []
 
-    def read(since_for=None):
+    def read(since_for=None, then=None):
         asked.append(since_for(1234))
         return account, deals, [], []
 

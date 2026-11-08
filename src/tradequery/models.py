@@ -63,6 +63,22 @@ class CashFlow:
 
 
 @dataclass(frozen=True)
+class Bar:
+    """One minute of prices for a symbol. Prices are bid; ``spread`` is in points.
+
+    ``time_utc`` is the start of the minute.
+    """
+
+    symbol: str
+    time_utc: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    spread: int = 0
+
+
+@dataclass(frozen=True)
 class Trade:
     """One closed position.
 

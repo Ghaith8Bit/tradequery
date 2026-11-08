@@ -46,7 +46,11 @@ class FakeMt5:
     ACCOUNT_MARGIN_MODE_RETAIL_HEDGING = 2
     ACCOUNT_TRADE_MODE_DEMO, ACCOUNT_TRADE_MODE_CONTEST, ACCOUNT_TRADE_MODE_REAL = 0, 1, 2
 
-    def __init__(self, *, login_ok=True, deals=(), orders=(), account=None, symbols=(), hidden=()):
+    TIMEFRAME_M1 = 1
+
+    def __init__(self, *, login_ok=True, deals=(), orders=(), account=None, symbols=(), hidden=(), rates=None):
+        self.rates = rates or {}  # symbol -> list of dicts like the library's structured array rows
+        self.rate_requests = []
         self.login_ok = login_ok
         self.deals = None if deals is None else list(deals)
         self.orders = list(orders)
@@ -86,3 +90,9 @@ class FakeMt5:
 
     def symbols_get(self):
         return list(self.symbols.values())
+
+    def copy_rates_range(self, symbol, timeframe, date_from, date_to):
+        """Like the library: from/to are server time encoded as UTC; rows carry server epochs."""
+        self.rate_requests.append((symbol, timeframe, date_from, date_to))
+        lo, hi = date_from.timestamp(), date_to.timestamp()
+        return [r for r in self.rates.get(symbol, []) if lo <= r["time"] <= hi]

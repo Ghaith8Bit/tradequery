@@ -23,7 +23,9 @@ from pathlib import Path
 from . import mt5 as mt5_client
 from .mt5 import Mt5Error
 from .settings import CredentialsError, load_credentials, load_settings
-from . import db, metrics
+from dataclasses import dataclass, field
+
+from . import db, metrics, pricepath
 from .crosscheck import compare
 from .importers.mt5_report import ReportError, parse_report
 from .synthetic import generate_account
@@ -92,10 +94,11 @@ def _sync_start(path: Path, full: bool) -> datetime | None:
     return latest - SYNC_OVERLAP if latest else None
 
 
-def _read_from_terminal(since_for=None):
+def _read_from_terminal(since_for=None, then=None):
     """Log in, read, log out. Returns (account, deals, specs, all_symbol_names).
 
     ``since_for(login)`` gives the time to read deals from (None = all history).
+    ``then(mt5, account, deals)`` runs while still logged in (used to fetch bars).
     """
     settings = load_settings()
     mt5 = mt5_client.connect(load_credentials())
@@ -106,9 +109,56 @@ def _read_from_terminal(since_for=None):
         deals = mt5_client.fetch_deals(mt5, settings.clock, date_from=since, wait_seconds=0 if since else 60)
         specs = mt5_client.fetch_symbol_specs(mt5, {d.symbol for d in deals if d.symbol})
         names = mt5_client.list_symbol_names(mt5)
+        if then:
+            then(mt5, account, deals)
     finally:
         mt5_client.disconnect(mt5)
     return account, deals, specs, names
+
+
+@dataclass
+class BarFetch:
+    bars: list = field(default_factory=list)
+    fetched: int = 0  # windows asked for
+    cached: int = 0  # windows skipped because a previous sync stored them
+    empty: int = 0  # windows the broker returned no bars for (older than its history)
+
+
+def fetch_missing_bars(mt5, clock, path: Path, new_deals) -> BarFetch:
+    """One-minute bars for the windows in which positions were open, except those already stored.
+
+    A window is skipped when it already has stored bars and ends before the
+    newest stored bar of its symbol (a previous sync fetched it).
+    """
+    stored = []
+    conn = db.connect(path, read_only=True) if path.is_file() else None
+    try:
+        if conn:
+            stored = db.load_deals(conn)
+        merged = {d.ticket: d for d in stored}
+        merged.update({d.ticket: d for d in new_deals})
+        trades = build_trades(sorted(merged.values(), key=lambda d: (d.time_utc, d.ticket)))
+        result = BarFetch()
+        first = True
+        for symbol, windows in pricepath.bar_windows(trades).items():
+            newest = None
+            if conn:
+                row = conn.execute("SELECT MAX(time_utc) FROM bars WHERE symbol = ?", (symbol,)).fetchone()
+                newest = db.parse_time(row[0]) if row and row[0] else None
+            for start, end in windows:
+                if conn and newest and end <= newest and db.bar_count(conn, symbol, start, end):
+                    result.cached += 1
+                    continue
+                # only the first request waits for the terminal to download history
+                bars = mt5_client.fetch_bars(mt5, clock, symbol, start, end, tries=3 if first else 1)
+                first = False
+                result.fetched += 1
+                result.empty += not bars
+                result.bars.extend(bars)
+        return result
+    finally:
+        if conn:
+            conn.close()
 
 
 def _print_balance_check(deals, mt5_balance: float, opening_balance: float = 0.0) -> bool:
@@ -141,8 +191,16 @@ def cmd_inspect(args) -> int:
 
 
 def cmd_download(args) -> int:
+    fetched = BarFetch()
+
+    def bars_while_logged_in(mt5, account, deals):
+        nonlocal fetched
+        if not args.no_bars:
+            fetched = fetch_missing_bars(mt5, load_settings().clock, db.db_path(account["login"], args.data_dir), deals)
+
     account, deals, specs, _ = _read_from_terminal(
-        since_for=lambda login: _sync_start(db.db_path(login, args.data_dir), args.full)
+        since_for=lambda login: _sync_start(db.db_path(login, args.data_dir), args.full),
+        then=bars_while_logged_in,
     )
     path = db.db_path(account["login"], args.data_dir)
     since = _sync_start(path, args.full)
@@ -154,6 +212,7 @@ def cmd_download(args) -> int:
             except LookupError:
                 previous_opening = None
             new = db.upsert_deals(conn, deals)
+            db.save_bars(conn, fetched.bars)
             stored = db.load_deals(conn)
             # Brokers keep a limited history. Whatever the stored deals do not
             # explain was already in the account before the first one.
@@ -180,6 +239,12 @@ def cmd_download(args) -> int:
         f"\nSaved to {path}: {len(stored)} deals ({new} new), {len(trades)} closed trades, "
         f"{len(flows)} cash flows, {len(specs)} symbol specs"
     )
+    if fetched.fetched or fetched.cached:
+        print(
+            f"One-minute bars: {len(fetched.bars)} saved from {fetched.fetched} time windows"
+            f" ({fetched.cached} windows already stored"
+            + (f", {fetched.empty} older than the broker's bar history" if fetched.empty else "") + ")"
+        )
     if abs(opening) >= 0.01 and stored:
         print(
             f"\nThe broker's history starts at {_fmt_time(stored[0].time_utc)} UTC with the account already "
@@ -269,6 +334,7 @@ def cmd_metrics(args) -> int:
         trades = db.load_trades(conn)
         flows = db.load_cash_flows(conn)
         specs = {s["symbol"]: s for s in db.load_symbols(conn)}
+        bars = db.load_bars(conn)
     finally:
         conn.close()
     start, end = _parse_day(args.since), _parse_day(args.until)
@@ -309,16 +375,44 @@ def cmd_metrics(args) -> int:
         lines += [("Average R / total R", f"{_num(m['avg_r'])} / {_num(m['total_r'])}"
                                           f"  ({m['r_excluded']} trades without a stop loss left out)"),
                   ("Planned risk-reward", _num(m["planned_rr"]))]
-    episodes = metrics.drawdown_episodes(chosen)
+    episodes = metrics.drawdown_episodes(chosen, chosen_flows)
     worst = max(episodes, key=lambda e: e.depth, default=None)
     lines += [
-        ("Max drawdown (closed trades)", f"{_money(m['max_drawdown'])}  ({_pct(m['max_drawdown_pct'])} of the balance at the peak)"),
+        ("Max drawdown (closed trades)", f"{_money(m['max_drawdown'])}  ({_pct(m['max_drawdown_pct'])} of the money at stake)"),
     ]
     if worst:
         recovered = _fmt_time(worst.recovery_time) if worst.recovery_time else "not recovered"
         start_text = _fmt_time(worst.peak_time) if worst.peak_time else "start of history"
         lines.append(("  worst episode", f"peak {start_text}, trough {_fmt_time(worst.trough_time)}, "
                                          f"{recovered}; {len(worst.position_ids)} trades to the trough"))
+    if m["peak_lots_open_time"]:
+        lines.append(("Peak lots open", f"{m['peak_lots_open']:.2f} at {_fmt_time(m['peak_lots_open_time'])}"
+                                        f"  (time-weighted average {_num(m['avg_lots_open'])})"))
+    pp = pricepath.compute_price_path_metrics(chosen, chosen_flows, bars, symbol_specs=specs,
+                                              opening_balance=account["opening_balance"])
+    lines.append(("Price path (one-minute bars, approximate)", None))
+    if not pp["price_path_coverage"]:
+        lines.append(("Coverage", "no one-minute bars stored; run make sync to download them"))
+    else:
+        worst_float = pp["worst_floating_pnl"]
+        lines += [
+            ("Coverage", f"{_pct(pp['price_path_coverage'])} of trades have bars for their whole life"),
+            ("Avg worst / best open result", f"{_money(pp['avg_mae'])} / {_money(pp['avg_mfe'])}  (MAE / MFE)"),
+            ("Deepest single trade (MAE)", _money(pp["worst_mae"])),
+            ("Avg minutes in profit / loss", f"{_num(pp['avg_minutes_in_profit'], 0)} / {_num(pp['avg_minutes_in_loss'], 0)}"),
+            ("Avg spread at open", f"{_num(pp['avg_spread_at_open'], 0)} points"),
+            ("Max equity drawdown", f"{_money(pp['max_equity_drawdown'])}  ({_pct(pp['max_equity_drawdown_pct'])} of the money"
+                                    f" at stake; worst case within the minute {_money(pp['max_equity_drawdown_low'])})"),
+        ]
+        ep = pp["max_equity_drawdown_episode"]
+        if ep:
+            start_text = _fmt_time(ep.peak_time) if ep.peak_time else "start of history"
+            recovered = _fmt_time(ep.recovery_time) if ep.recovery_time else "not recovered"
+            lines.append(("  worst equity episode", f"peak {start_text}, trough {_fmt_time(ep.trough_time)}, {recovered}"))
+            if ep.added_capital:
+                lines.append(("  refilled during it", f"deposits of {_money(ep.added_capital)} were made before the trough"))
+        if worst_float:
+            lines.append(("Worst floating loss", f"{_money(worst_float[0])} at {_fmt_time(worst_float[1])}"))
     runs = metrics.streaks(chosen, load_settings().breakeven_breaks_streak)
     longest_loss = max((r for r in runs if r.kind == "loss"), key=lambda r: r.length, default=None)
     lines += [
@@ -342,8 +436,9 @@ def cmd_metrics(args) -> int:
     lines.append(("Return (simple)", f"{_pct(m['return_pct'])}  of opening balance + deposits"))
     for label, value in lines:
         print(f"\n{label}" if value is None else f"  {label:<32} {value}")
-    print("\nDrawdown here uses closed trades only, with deposits and withdrawals removed;"
-          " floating losses of open positions are not included.")
+    print("\nMax drawdown uses closed trades only; equity drawdown adds floating losses from one-minute bars."
+          " Both have deposits and withdrawals removed. Bars show a minute's high and low but not their order,"
+          " so excursions and equity are approximate.")
     return 0
 
 
@@ -453,6 +548,7 @@ def main(argv=None) -> int:
     download = sub.add_parser("download", help="save the account's history to the data folder")
     download.add_argument("--full", action="store_true",
                           help="re-read the whole history instead of only what is new")
+    download.add_argument("--no-bars", action="store_true", help="skip downloading one-minute bars")
     download.set_defaults(func=cmd_download)
     imp = sub.add_parser("import", help="load an MT5 HTML history report into the account's database")
     imp.add_argument("report", help="path to the ReportHistory-<login>.html file")

@@ -194,3 +194,17 @@ def test_no_trades_gives_empty_values_not_errors():
 def test_no_losses_means_no_profit_factor():
     wins = [t for t in make_trades() if t.outcome == "win"]
     assert compute_metrics(wins, [])["profit_factor"] is None
+
+
+def test_drawdown_percent_counts_deposits_made_during_it():
+    # +100 (balance 1100), deposit 1000, then -300 (balance 1800): depth 300 of 1100 + 1000 at stake
+    trades = make_trades()[:1]
+    t1 = trades[0]
+    loss = Trade(**{**t1.__dict__, "position_id": 99, "close_time_utc": t1.close_time_utc + timedelta(days=2),
+                    "open_time_utc": t1.close_time_utc + timedelta(days=2, minutes=-5), "profit": -300.0,
+                    "commission": 0.0, "net_profit": -300.0, "outcome": "loss", "is_win": False, "balance_after": 1800.0})
+    refill = [CashFlow(5, t1.close_time_utc + timedelta(days=1), "deposit", 1000.0)]
+    (episode,) = drawdown_episodes([t1, loss], refill)
+    assert (episode.depth, episode.added_capital) == (300, 1000)
+    assert episode.depth_pct == pytest.approx(300 / 2100)
+    assert drawdown_episodes([t1, loss])[0].depth_pct == pytest.approx(300 / 1100)  # without the flow it looks worse

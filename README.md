@@ -97,7 +97,9 @@ To look inside the Wine container, run `make shell-mt5`. `make clean-mt5` delete
 - The sync needs the MT5 terminal, so it runs locally (Wine in Docker), not on a server.
 - Brokers keep a limited deal and price history. Answers that reach back that far will say so.
 - The report importer is built for hedging accounts, where a position's id is its opening order's ticket.
-- Planned: balance drawdown covers closed trades only. Equity drawdown from M1 bars will be an approximation.
+- Balance drawdown covers closed trades only. Equity drawdown, MAE and MFE come from one-minute bars and are approximate: a bar holds the minute's high and low but not their order. A conservative "worst case within the minute" bound is shown next to equity drawdown.
+- Drawdown percentages are of the money at stake: the balance or equity at the peak plus deposits made before the trough.
+- `make sync` also stores one-minute bars for the windows in which positions were open (only new windows on later runs; `--no-bars` skips them).
 
 ## Layout
 
@@ -113,6 +115,8 @@ src/tradequery/
   importers/      MT5 HTML report importer
   crosscheck.py   report vs stored history, deal by deal and trade by trade
   metrics.py      named metrics with definitions: win rate, profit factor, R, streaks, drawdown, ...
+  exposure.py     lots open over time: peak, average, at a given moment
+  pricepath.py    from one-minute bars: MAE/MFE, minutes in profit/loss, equity curve and equity drawdown
   cli.py          demo | inspect | download | import | compare | metrics | show
 docker/mt5/       Wine image and its setup script
 tests/            unit tests (synthetic data and a made-up report; no real accounts)

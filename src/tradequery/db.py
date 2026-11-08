@@ -26,11 +26,11 @@ from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import TRADE_TYPES, CashFlow, Deal, Trade
+from .models import TRADE_TYPES, Bar, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SQL_TYPES = {"int": "INTEGER", "float": "REAL", "str": "TEXT", "datetime": "TEXT", "bool": "INTEGER"}
 
@@ -145,21 +145,47 @@ def _model_ddl(table: str) -> str:
     return f"CREATE TABLE {table} ({', '.join(columns)})"
 
 
+# Upgrades from one schema version to the next. They only add things, so an
+# existing account database upgrades in place the next time it is opened.
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    2: (
+        # One-minute bars (bid prices; spread in points), cached for the windows
+        # in which positions were open. Input to the price path; never shown to the LLM.
+        "CREATE TABLE bars (symbol TEXT NOT NULL, time_utc TEXT NOT NULL, open REAL NOT NULL, "
+        "high REAL NOT NULL, low REAL NOT NULL, close REAL NOT NULL, spread INTEGER NOT NULL, "
+        "PRIMARY KEY (symbol, time_utc)) WITHOUT ROWID",
+    ),
+}
+
+
 def _create_schema(conn: sqlite3.Connection) -> None:
     statements = [
         f"CREATE TABLE accounts ({', '.join(_ACCOUNT_COLUMNS)})",
         f"CREATE TABLE symbols ({', '.join(f'{n} {t}' for n, (t, _) in _SYMBOL_COLUMNS.items())})",
         *(_model_ddl(table) for table in _MODEL_TABLES),
         *_INDEXES,
-        f"PRAGMA user_version = {SCHEMA_VERSION}",
+        "PRAGMA user_version = 1",
     ]
     with conn:
         for statement in statements:
             conn.execute(statement)
+    _migrate(conn, 1)
+
+
+def _migrate(conn: sqlite3.Connection, version: int) -> None:
+    with conn:
+        for target in range(version + 1, SCHEMA_VERSION + 1):
+            for statement in MIGRATIONS[target]:
+                conn.execute(statement)
+            conn.execute(f"PRAGMA user_version = {target}")
 
 
 def connect(path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
-    """Open an account database. Writable connections create the file and schema if needed."""
+    """Open an account database. Writable connections create the file and schema if needed.
+
+    A database from an older version of TradeQuery is upgraded in place first,
+    even when it is then opened read-only.
+    """
     path = Path(path)
     if read_only:
         if not path.is_file():
@@ -172,11 +198,17 @@ def connect(path: Path | str, *, read_only: bool = False) -> sqlite3.Connection:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 0 and not read_only:
         _create_schema(conn)
+    elif 0 < version < SCHEMA_VERSION:
+        if read_only:
+            conn.close()
+            connect(path).close()  # upgrade with a writable connection, then reopen
+            return connect(path, read_only=True)
+        _migrate(conn, version)
     elif version != SCHEMA_VERSION:
         conn.close()
         raise SchemaError(
             f"{path} has schema version {version}, this code expects {SCHEMA_VERSION}. "
-            "Delete the file and run the download again."
+            "It was made by a newer TradeQuery, or is not a TradeQuery database."
         )
     return conn
 
@@ -296,6 +328,36 @@ def upsert_deals(conn: sqlite3.Connection, deals: list[Deal], *, overwrite: bool
         deals = [d for d in deals if d.ticket not in stored]
     _write_rows(conn, "deals", deals, replace_all=False)
     return conn.execute("SELECT COUNT(*) FROM deals").fetchone()[0] - before
+
+
+def save_bars(conn: sqlite3.Connection, bars: list[Bar]) -> int:
+    """Insert or replace one-minute bars. Returns how many rows were written."""
+    conn.executemany(
+        "INSERT OR REPLACE INTO bars (symbol, time_utc, open, high, low, close, spread) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(b.symbol, format_time(b.time_utc), b.open, b.high, b.low, b.close, int(b.spread)) for b in bars],
+    )
+    return len(bars)
+
+
+def load_bars(conn: sqlite3.Connection, symbol: str | None = None) -> dict[str, list[Bar]]:
+    """Stored bars by symbol, oldest first."""
+    query = "SELECT symbol, time_utc, open, high, low, close, spread FROM bars"
+    params: tuple = ()
+    if symbol:
+        query += " WHERE symbol = ?"
+        params = (symbol,)
+    out: dict[str, list[Bar]] = {}
+    for row in conn.execute(query + " ORDER BY symbol, time_utc", params):
+        out.setdefault(row[0], []).append(Bar(row[0], parse_time(row[1]), row[2], row[3], row[4], row[5], row[6]))
+    return out
+
+
+def bar_count(conn: sqlite3.Connection, symbol: str, start: datetime, end: datetime) -> int:
+    """How many bars of a symbol are stored with start <= time <= end."""
+    return conn.execute(
+        "SELECT COUNT(*) FROM bars WHERE symbol = ? AND time_utc BETWEEN ? AND ?",
+        (symbol, format_time(start), format_time(end)),
+    ).fetchone()[0]
 
 
 def latest_deal_time(conn: sqlite3.Connection) -> datetime | None:

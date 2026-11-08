@@ -14,11 +14,13 @@ Rules that keep the numbers honest:
 from __future__ import annotations
 
 import math
+from bisect import bisect_right
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from statistics import mean, median
 
+from . import exposure
 from .models import CashFlow, Trade
 
 DEFINITIONS = {
@@ -50,7 +52,10 @@ DEFINITIONS = {
     "credits_and_bonuses": "Sum of credits and bonuses, reported apart from deposits.",
     "return_pct": "Net profit / (opening balance + deposits): a simple return, not time-weighted.",
     "max_drawdown": "Largest peak-to-trough fall of cumulative trading P&L (cash flows removed). Closed trades only.",
-    "max_drawdown_pct": "That fall as a share of the account balance at the peak.",
+    "max_drawdown_pct": "That fall as a share of the money at stake: the balance at the peak plus deposits made before the trough.",
+    "peak_lots_open": "Largest gross lots (long + short) open at the same time, across all symbols.",
+    "peak_lots_open_time": "When gross lots open first reached that peak (UTC).",
+    "avg_lots_open": "Time-weighted average gross lots open, from the first open to the last close.",
 }
 
 
@@ -201,6 +206,7 @@ class DrawdownEpisode:
     trough_value: float
     balance_at_peak: float
     position_ids: list[int] = field(default_factory=list)  # trades from the peak to the trough
+    added_capital: float = 0.0  # deposits made between the peak and the trough
 
     @property
     def depth(self) -> float:
@@ -208,49 +214,100 @@ class DrawdownEpisode:
 
     @property
     def depth_pct(self) -> float | None:
-        return self.depth / self.balance_at_peak if self.balance_at_peak > 0 else None
+        """Depth as a share of all money at stake: the account at the peak plus deposits before the trough.
+
+        Without the deposits, an account wiped out, refilled and losing again
+        would show an impossible fall of more than 100%.
+        """
+        at_stake = self.balance_at_peak + self.added_capital
+        return self.depth / at_stake if at_stake > 0 else None
 
 
-def drawdown_episodes(trades: list[Trade]) -> list[DrawdownEpisode]:
+@dataclass(frozen=True)
+class SeriesPoint:
+    """One point of a P&L series for drawdown: cash flows already removed from the values.
+
+    ``peak_value`` can set a new peak and ``trough_value`` (<= peak_value) can set
+    a new trough; they differ only for conservative bounds (bar close vs bar low).
+    """
+
+    time_utc: datetime
+    peak_value: float
+    trough_value: float
+    account_value: float  # the real balance or equity at this point, for percentages
+    ref: int | None = None  # e.g. the position closed here
+    deposits: float = 0.0  # deposits made so far (cumulative), for the money at stake
+
+
+def series_drawdowns(points: list[SeriesPoint], start_account_value: float = 0.0) -> list[DrawdownEpisode]:
+    """Peak-to-recovery episodes of a series that starts at 0 (the start is the first peak)."""
+    episodes: list[DrawdownEpisode] = []
+    peak, peak_time, peak_account, peak_deposits = 0.0, None, start_account_value, 0.0
+    episode: DrawdownEpisode | None = None
+    since_peak: list[int] = []
+    for p in points:
+        low = min(p.trough_value, p.peak_value)
+        # Within a point the dip comes first (a minute's low), then the close can make a new peak.
+        if low < peak:
+            if p.ref is not None:
+                since_peak.append(p.ref)
+            if episode is None:
+                episode = DrawdownEpisode(peak_time, p.time_utc, None, peak, low, peak_account,
+                                          added_capital=round(p.deposits - peak_deposits, 2))
+            if low < episode.trough_value:
+                episode.trough_value, episode.trough_time = low, p.time_utc
+                episode.position_ids = list(since_peak)
+                episode.added_capital = round(p.deposits - peak_deposits, 2)
+            elif not episode.position_ids:
+                episode.position_ids = list(since_peak)
+        if p.peak_value >= peak:
+            if episode is not None:
+                episode.recovery_time = p.time_utc
+                episodes.append(episode)
+                episode = None
+            peak, peak_time, peak_account, peak_deposits = p.peak_value, p.time_utc, p.account_value, p.deposits
+            since_peak = []
+    if episode is not None:
+        episodes.append(episode)
+    return episodes
+
+
+def deposits_until(cash_flows: Iterable[CashFlow]):
+    """A function giving the total deposited up to (and including) a moment."""
+    stamps = sorted((f.time_utc, f.amount) for f in cash_flows if f.type == "deposit")
+    times = [s[0] for s in stamps]
+    totals, running = [], 0.0
+    for _, amount in stamps:
+        running += amount
+        totals.append(running)
+
+    def until(when: datetime) -> float:
+        i = bisect_right(times, when)
+        return totals[i - 1] if i else 0.0
+
+    return until
+
+
+def drawdown_episodes(trades: list[Trade], cash_flows: Iterable[CashFlow] = ()) -> list[DrawdownEpisode]:
     """Peak-to-recovery episodes of cumulative trading P&L (cash flows removed).
 
     Working on trading P&L rather than the balance means a withdrawal is never
     a drawdown and a deposit never hides one. The percentage uses the real
-    balance at the peak (trade.balance_after, which includes cash flows).
+    balance at the peak (trade.balance_after, which includes cash flows) plus
+    any deposits made before the trough.
     """
     ordered = sorted(trades, key=lambda t: (t.close_time_utc, t.position_id))
     if not ordered:
         return []
+    deposited = deposits_until(cash_flows)
     first = ordered[0]
     start_balance = (first.balance_after - _net(first)) if first.balance_after is not None else 0.0
-
-    episodes: list[DrawdownEpisode] = []
-    cum = 0.0
-    peak, peak_time, peak_balance = 0.0, None, start_balance
-    episode: DrawdownEpisode | None = None
-    since_peak: list[int] = []
+    points, cum = [], 0.0
     for t in ordered:
         cum = round(cum + _net(t), 2)
-        if cum >= peak:
-            if episode is not None:
-                episode.recovery_time = t.close_time_utc
-                episodes.append(episode)
-                episode = None
-            peak, peak_time = cum, t.close_time_utc
-            peak_balance = t.balance_after if t.balance_after is not None else peak_balance
-            since_peak = []
-            continue
-        since_peak.append(t.position_id)
-        if episode is None:
-            episode = DrawdownEpisode(peak_time, t.close_time_utc, None, peak, cum, peak_balance)
-        if cum < episode.trough_value:
-            episode.trough_value, episode.trough_time = cum, t.close_time_utc
-            episode.position_ids = list(since_peak)
-        elif not episode.position_ids:
-            episode.position_ids = list(since_peak)
-    if episode is not None:
-        episodes.append(episode)
-    return episodes
+        balance = t.balance_after if t.balance_after is not None else start_balance + cum
+        points.append(SeriesPoint(t.close_time_utc, cum, cum, balance, t.position_id, deposited(t.close_time_utc)))
+    return series_drawdowns(points, start_balance)
 
 
 # ---------------------------------------------------------------- everything at once
@@ -288,8 +345,10 @@ def compute_metrics(
     credits = round(sum(f.amount for f in cash_flows if f.type in ("credit", "bonus")), 2)
     capital = opening_balance + deposits
 
-    episodes = drawdown_episodes(trades)
+    episodes = drawdown_episodes(trades, cash_flows)
     worst = max(episodes, key=lambda e: e.depth, default=None)
+    events = exposure.exposure_events(trades)
+    peak_exposure = exposure.peak_lots_open(events)
 
     ci = wilson_interval(len(wins), len(trades))
     return {
@@ -322,4 +381,7 @@ def compute_metrics(
         "return_pct": net / capital if capital > 0 else None,
         "max_drawdown": worst.depth if worst else 0.0,
         "max_drawdown_pct": worst.depth_pct if worst else None,
+        "peak_lots_open": peak_exposure.gross_lots if peak_exposure else 0.0,
+        "peak_lots_open_time": peak_exposure.time_utc if peak_exposure else None,
+        "avg_lots_open": exposure.avg_lots_open(events),
     }
