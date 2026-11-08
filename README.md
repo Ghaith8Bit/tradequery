@@ -44,13 +44,14 @@ Every `make` target rebuilds its image first. The rebuild is cached, so it takes
 cp .env.example .env      # fill in MT5_LOGIN, MT5_INVESTOR_PASSWORD, MT5_SERVER
 make mt5-setup            # once: Wine prefix, Windows Python, MT5 terminal (10-20 min)
 make inspect              # logs in, prints the account and a history summary, changes nothing
-make sync                 # saves the full history to data/accounts/<login>.db
+make sync                 # saves the history to data/accounts/<login>.db (later runs: only what is new)
 make show                 # analyse the stored account (no MT5 needed)
 ```
 
 - **Use the investor (read-only) password**, never the master password. `inspect` prints "read-only (investor)" or warns if the login can trade.
 - `MT5_SERVER` must match the broker's server name exactly, spaces included (for example `Broker-Live 3`).
 - **Use your broker's installer.** Set `MT5_INSTALLER_URL` in `.env` to your broker's MT5 installer before `make mt5-setup`. It installs the broker's release build together with its server list. Without it the generic MetaQuotes installer is used. `.env.example` shows the format.
+- After the first sync, `make sync` re-reads only from a day before the newest stored deal and updates by ticket, so nothing duplicates. To re-read everything, run `docker compose run --rm mt5 download --full`.
 - Brokers keep a limited history. If it starts after the account opened, `sync` infers the opening balance (MT5 balance minus every stored deal) and says so.
 
 ## Import a report (no terminal needed)
