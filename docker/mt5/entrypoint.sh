@@ -2,7 +2,7 @@
 # Commands:
 #   setup      one-time: create the Wine prefix, install Windows Python + the MT5 terminal
 #   inspect    log in with the investor password and print a summary (changes nothing)
-#   download   log in and save the account's history to /data/accounts/<login>/
+#   download   log in and save the account's history to /data/accounts/<login>.db
 #   shell      a bash shell in the container (for debugging)
 set -euo pipefail
 

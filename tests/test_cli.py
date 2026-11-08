@@ -1,16 +1,23 @@
+from datetime import datetime, timezone
+
 import pytest
 
 from tradequery.trades import balance_from_deals
 from tradequery.synthetic import generate_account
-from tradequery.store import account_dir, load_deals, load_json, save_deals, save_json
+from tradequery import db
+from tradequery.settings import load_settings
 from tradequery import cli
 
 
 def write_account(root, login, balance):
     deals = generate_account().deals
-    folder = account_dir(login, root)
-    save_deals(folder / "deals.csv", deals)
-    save_json(folder / "account.json", {"login": login, "balance": balance})
+    conn = db.connect(db.db_path(login, root))
+    with conn:
+        db.upsert_deals(conn, deals)
+        db.save_account(conn, {"login": login, "balance": balance}, earliest_history=None,
+                        synced_at=datetime.now(timezone.utc))
+        db.rebuild_derived(conn, load_settings())
+    conn.close()
     return deals
 
 
@@ -59,16 +66,29 @@ def fake_terminal(monkeypatch, account):
     return deals
 
 
-def test_download_saves_files_without_the_name_or_credentials(tmp_path, monkeypatch, capsys):
+def test_download_saves_the_account_without_the_name_or_credentials(tmp_path, monkeypatch, capsys):
     deals = fake_terminal(monkeypatch, ACCOUNT)
     assert cli.main(["--data-dir", str(tmp_path), "download"]) == 0
-    folder = account_dir(1234, tmp_path)
-    assert load_deals(folder / "deals.csv") == deals
-    saved = load_json(folder / "account.json")
-    assert "name" not in saved and "password" not in str(saved).lower()
-    assert saved["login"] == 1234 and saved["first_deal_utc"]
-    assert load_json(folder / "symbols.json")[0]["name"] == "XAUUSD"
-    assert "OK: the deals add up" in capsys.readouterr().out
+    conn = db.connect(db.db_path(1234, tmp_path), read_only=True)
+    assert db.load_deals(conn) == deals
+    saved = db.load_account(conn)
+    assert "name" not in saved and "Test Name" not in str(saved) and "password" not in str(saved).lower()
+    assert saved["account_id"] == 1234 and saved["broker"] == "Broker"
+    assert saved["earliest_history_utc"] == db.format_time(deals[0].time_utc)
+    assert db.load_symbols(conn)[0]["contract_size"] == 100.0
+    assert len(db.load_trades(conn)) == 48
+    conn.close()
+    out = capsys.readouterr().out
+    assert f"{len(deals)} deals ({len(deals)} new)" in out
+    assert "OK: the deals add up" in out
+
+
+def test_a_second_download_adds_nothing_twice(tmp_path, monkeypatch, capsys):
+    deals = fake_terminal(monkeypatch, ACCOUNT)
+    cli.main(["--data-dir", str(tmp_path), "download"])
+    assert cli.main(["--data-dir", str(tmp_path), "download"]) == 0
+    assert f"{len(deals)} deals (0 new)" in capsys.readouterr().out
+    assert cli.main(["--data-dir", str(tmp_path), "show"]) == 0
 
 
 def test_inspect_warns_when_the_login_can_trade(monkeypatch, capsys):

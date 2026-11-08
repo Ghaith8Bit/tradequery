@@ -1,8 +1,6 @@
 import pytest
 
 from tradequery.settings import CredentialsError, load_credentials, read_env_file
-from tradequery.synthetic import generate_account
-from tradequery.store import account_dir, load_deals, save_deals
 
 
 def test_env_file_is_parsed(tmp_path):
@@ -41,9 +39,3 @@ def test_missing_or_bad_credentials_are_explained(tmp_path, monkeypatch):
     with pytest.raises(CredentialsError, match="digits"):
         load_credentials(path)
 
-
-def test_deals_survive_a_save_and_load(tmp_path):
-    deals = generate_account().deals
-    path = account_dir(777, tmp_path) / "deals.csv"
-    save_deals(path, deals)
-    assert load_deals(path) == deals

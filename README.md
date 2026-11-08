@@ -40,7 +40,7 @@ The `MetaTrader5` Python package only exists for Windows, so the sync runs insid
    cp .env.example .env      # fill in login, INVESTOR password, server
    make mt5-setup            # once: installs Windows Python + MT5 into a Docker volume
    make inspect              # logs in, prints account + history summary, changes nothing
-   make sync                 # saves history to ./data/accounts/<login>/
+   make sync                 # saves history to ./data/accounts/<login>.db
    make show                 # analyse the saved account (no MT5)
    ```
 
@@ -60,7 +60,7 @@ src/tradequery/
   settings.py   settings.toml + MT5 credentials
   trades.py     deals -> closed trades -> derived fields, balance curve, balance check
   synthetic.py  fake account with planted facts (tests, demo, public repo)
-  store.py      save/load deals, symbols, account facts
+  db.py         one SQLite database per account: schema, save/load, read-only access
   mt5.py        read from the MT5 terminal (runs only inside Wine)
   cli.py        demo | inspect | download | show
 docker/mt5/     Wine image and its setup script

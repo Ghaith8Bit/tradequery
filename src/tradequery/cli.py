@@ -2,7 +2,7 @@
 
   tradequery demo        print a synthetic account (no MT5, no credentials)
   tradequery inspect     log in to MT5; show account, symbols, history summary
-  tradequery download    save account, deals and symbol specs to data/accounts/<login>/
+  tradequery download    save account, deals and symbol specs to data/accounts/<login>.db
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -15,12 +15,11 @@ import argparse
 import sys
 from collections import Counter
 from datetime import datetime, timezone
-from pathlib import Path
 
 from . import mt5 as mt5_client
 from .mt5 import Mt5Error
-from .settings import CredentialsError, data_dir, load_credentials, load_settings
-from .store import account_dir, load_deals, load_json, save_deals, save_json
+from .settings import CredentialsError, load_credentials, load_settings
+from . import db
 from .synthetic import generate_account
 from .trades import balance_curve, balance_from_deals, build_trades, derive_trades, extract_cash_flows
 
@@ -114,17 +113,29 @@ def cmd_inspect(args) -> int:
 
 def cmd_download(args) -> int:
     account, deals, specs, _ = _read_from_terminal()
-    folder = account_dir(account["login"], args.data_dir)
-    saved = {k: v for k, v in account.items() if k != "name"}  # keep the name out of the files
-    saved["downloaded_at_utc"] = datetime.now(timezone.utc).isoformat()
-    saved["first_deal_utc"] = deals[0].time_utc.isoformat() if deals else None
-    save_json(folder / "account.json", saved)
-    save_json(folder / "symbols.json", specs)
-    save_deals(folder / "deals.csv", deals)
+    path = db.db_path(account["login"], args.data_dir)
+    conn = db.connect(path)
+    try:
+        with conn:  # all or nothing
+            new = db.upsert_deals(conn, deals)
+            stored = db.load_deals(conn)
+            db.save_account(
+                conn,
+                account,
+                earliest_history=stored[0].time_utc if stored else None,
+                synced_at=datetime.now(timezone.utc),
+            )
+            db.save_symbols(conn, specs)
+            trades, flows = db.rebuild_derived(conn, load_settings())
+    finally:
+        conn.close()
     _print_account(account)
     _print_history_summary(deals)
-    print(f"\nSaved {len(deals)} deals and {len(specs)} symbol specs to {folder}")
-    _print_balance_check(deals, account["balance"])
+    print(
+        f"\nSaved to {path}: {len(stored)} deals ({new} new), {len(trades)} closed trades, "
+        f"{len(flows)} cash flows, {len(specs)} symbol specs"
+    )
+    _print_balance_check(stored, account["balance"])
     print("\nNext: tradequery show")
     return 0
 
@@ -132,23 +143,24 @@ def cmd_download(args) -> int:
 def _pick_login(args) -> int:
     if args.login:
         return args.login
-    root = Path(args.data_dir or data_dir()) / "accounts"
-    logins = sorted(p.name for p in root.iterdir() if (p / "deals.csv").is_file()) if root.is_dir() else []
+    logins = db.list_accounts(args.data_dir)
     if len(logins) == 1:
-        return int(logins[0])
+        return logins[0]
     if not logins:
         raise SystemExit("No downloaded account found. Run: tradequery download")
-    raise SystemExit(f"Several accounts downloaded ({', '.join(logins)}). Pick one with --login.")
+    raise SystemExit(f"Several accounts downloaded ({', '.join(map(str, logins))}). Pick one with --login.")
 
 
 def cmd_show(args) -> int:
     login = _pick_login(args)
-    folder = account_dir(login, args.data_dir)
-    deals = load_deals(folder / "deals.csv")
-    account = load_json(folder / "account.json")
-    settings = load_settings()
-    flows = extract_cash_flows(deals)
-    trades = derive_trades(build_trades(deals), flows, settings)
+    conn = db.connect(db.db_path(login, args.data_dir), read_only=True)
+    try:
+        account = db.load_account(conn)
+        deals = db.load_deals(conn)
+        flows = db.load_cash_flows(conn)
+        trades = db.load_trades(conn)
+    finally:
+        conn.close()
 
     print(f"Account {login}: {len(deals)} deals -> {len(trades)} closed trades, {len(flows)} cash flows")
     for kind in ("deposit", "withdrawal", "credit", "bonus", "correction", "charge", "other"):
