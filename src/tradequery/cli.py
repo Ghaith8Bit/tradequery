@@ -10,6 +10,7 @@
   tradequery sequences   martingale and grid sequences: depth, lot multiplier, result
   tradequery import-calendar [FILE]   load the economic calendar export and join it to trades
   tradequery news        trades and drawdowns that overlapped scheduled news
+  tradequery query SPEC  run a QuerySpec (JSON) on a stored account (--examples all: the plan's questions)
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -594,6 +595,62 @@ def cmd_news(args) -> int:
     return 0
 
 
+def _cell(value) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        if value == 0:
+            return "0"
+        return f"{value:.4f}" if abs(value) < 1 else f"{value:,.2f}"  # shares and rates keep 4 decimals
+    return str(value)
+
+
+def _print_result(result, show_sql: bool) -> None:
+    if result.kind != "query":
+        print(f"[{result.kind}] {result.message}")
+        return
+    print(f"Interpretation: {result.interpretation}")
+    if not result.rows:
+        print("  (no rows)")
+    else:
+        table = [[str(c) for c in result.columns]] + [[_cell(v) for v in row] for row in result.rows]
+        widths = [max(len(r[i]) for r in table) for i in range(len(table[0]))]
+        for n, row in enumerate(table):
+            print("  " + "  ".join(v.rjust(w) if n else v.ljust(w) for v, w in zip(row, widths)))
+    if result.truncated:
+        print("  (more rows than shown; raise the spec's limit, up to 500)")
+    for note in result.notes:
+        print(f"  Note: {note}")
+    if show_sql:
+        print("  SQL: " + result.sql.replace("\n", " "))
+
+
+def cmd_query(args) -> int:
+    from .examples import EXAMPLES
+    from .execute import execute
+    from .spec import SpecError, parse_spec
+
+    settings = load_settings()
+    path = db.db_path(_pick_login(args), args.data_dir)
+    if args.examples:
+        chosen = EXAMPLES if args.examples == "all" else [EXAMPLES[int(i) - 1] for i in args.examples.split(",")]
+    else:
+        text = Path(args.file).read_text(encoding="utf-8") if args.file else args.spec
+        if not text:
+            raise SystemExit("Give a spec as JSON text, --file spec.json, or --examples all")
+        chosen = [(None, text)]
+    for question, spec in chosen:
+        if question:
+            print(f"\nQ: {question}")
+        try:
+            parsed = parse_spec(spec)
+        except SpecError as error:
+            print(f"Spec rejected: {error}")
+            return 2
+        _print_result(execute(parsed, path, settings), args.sql)
+    return 0
+
+
 def cmd_compare(args) -> int:
     report = parse_report(args.report, load_settings().clock)
     conn = db.connect(db.db_path(report.login, args.data_dir), read_only=True)
@@ -732,6 +789,13 @@ def main(argv=None) -> int:
     nw.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
     nw.add_argument("--limit", type=int, default=10, help="how many events to list")
     nw.set_defaults(func=cmd_news)
+    qu = sub.add_parser("query", help="run a QuerySpec (JSON) on a stored account")
+    qu.add_argument("spec", nargs="?", help="the spec as JSON text")
+    qu.add_argument("--file", help="read the spec from a JSON file")
+    qu.add_argument("--examples", help="run the plan's example questions: all, or numbers like 2,5")
+    qu.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
+    qu.add_argument("--sql", action="store_true", help="also print the SQL that ran")
+    qu.set_defaults(func=cmd_query)
     comp = sub.add_parser("compare", help="check an MT5 HTML report against the stored (synced) history")
     comp.add_argument("report", help="path to the ReportHistory-<login>.html file")
     comp.add_argument("--show", type=int, default=20, help="how many differences to print")

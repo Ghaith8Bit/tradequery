@@ -62,6 +62,7 @@ class Settings:
     breakeven_breaks_streak: bool = False
     detectors: DetectorSettings = field(default_factory=DetectorSettings)
     news: NewsSettings = field(default_factory=NewsSettings)
+    symbol_aliases: tuple[tuple[str, str], ...] = ()  # broker symbol -> canonical name
 
 
 def load_settings(path: Path | str | None = None) -> Settings:
@@ -79,6 +80,7 @@ def load_settings(path: Path | str | None = None) -> Settings:
         breakeven_breaks_streak=bool(raw.get("metrics", {}).get("breakeven_breaks_streak", False)),
         detectors=_detector_settings(raw.get("detectors", {})),
         news=_news_settings(raw.get("news", {})),
+        symbol_aliases=tuple((k, str(v)) for k, v in raw.get("symbols", {}).get("aliases", {}).items()),
     )
 
 

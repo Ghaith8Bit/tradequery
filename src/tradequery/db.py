@@ -27,13 +27,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import detectors
-from . import news
+from . import facts, news
 from .detectors import sequences
 from .models import TRADE_TYPES, Bar, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 _SQL_TYPES = {"int": "INTEGER", "float": "REAL", "str": "TEXT", "datetime": "TEXT", "bool": "INTEGER"}
 
@@ -183,6 +183,31 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE INDEX news_events_time ON news_events (time_utc)",
         "CREATE TABLE trade_news (position_id INTEGER NOT NULL, value_id INTEGER NOT NULL, "
         "minutes_to_event REAL NOT NULL, phase TEXT NOT NULL, PRIMARY KEY (position_id, value_id))",
+    ),
+    6: (
+        # Derived layers stored for the query layer (facts.py), and the views it queries.
+        "CREATE TABLE trade_facts (position_id INTEGER PRIMARY KEY, canonical_symbol TEXT NOT NULL, "
+        "month TEXT NOT NULL, mae REAL, mfe REAL, minutes_in_profit INTEGER, minutes_in_loss INTEGER, "
+        "spread_at_open INTEGER, risk_amount REAL, planned_rr REAL, r_multiple REAL, sequence_id INTEGER, "
+        "streak_id INTEGER, drawdown_episode_id INTEGER, news_overlap INTEGER NOT NULL)",
+        "CREATE TABLE streaks (streak_id INTEGER PRIMARY KEY, type TEXT NOT NULL, length INTEGER NOT NULL, "
+        "start_utc TEXT NOT NULL, end_utc TEXT NOT NULL, net_pnl REAL NOT NULL)",
+        "CREATE TABLE drawdown_episodes (episode_id INTEGER PRIMARY KEY, basis TEXT NOT NULL, "
+        "peak_time_utc TEXT, trough_time_utc TEXT NOT NULL, recovery_time_utc TEXT, peak_value REAL NOT NULL, "
+        "trough_value REAL NOT NULL, depth_abs REAL NOT NULL, depth_pct REAL, duration_days REAL NOT NULL, "
+        "trade_count INTEGER NOT NULL, news_loss_share REAL, added_capital REAL NOT NULL)",
+        "CREATE TABLE exposure (time_utc TEXT NOT NULL, symbol TEXT NOT NULL, long_lots REAL NOT NULL, "
+        "short_lots REAL NOT NULL, net_lots REAL NOT NULL, gross_lots REAL NOT NULL, positions_open INTEGER NOT NULL)",
+        "CREATE INDEX exposure_symbol_time ON exposure (symbol, time_utc)",
+        "CREATE TABLE equity_curve (time_utc TEXT NOT NULL, balance REAL NOT NULL, floating_pnl REAL NOT NULL, "
+        "equity REAL NOT NULL, equity_low_bound REAL NOT NULL)",
+        "CREATE VIEW v_trades AS SELECT t.*, f.canonical_symbol, f.month, f.mae, f.mfe, f.minutes_in_profit, "
+        "f.minutes_in_loss, f.spread_at_open, f.risk_amount, f.planned_rr, f.r_multiple, f.sequence_id, "
+        "f.streak_id, f.drawdown_episode_id, COALESCE(f.news_overlap, 0) AS news_overlap "
+        "FROM trades t LEFT JOIN trade_facts f ON f.position_id = t.position_id",
+        "CREATE VIEW v_sequences AS SELECT s.*, EXISTS (SELECT 1 FROM sequence_trades st JOIN trade_news n "
+        "ON n.position_id = st.position_id WHERE st.sequence_id = s.sequence_id) AS news_overlap FROM sequences s",
+        "CREATE VIEW v_cash_flows AS SELECT c.*, substr(c.time_utc, 1, 7) AS month FROM cash_flows c",
     ),
 }
 
@@ -433,7 +458,41 @@ def rebuild_derived(conn: sqlite3.Connection, settings: Settings) -> tuple[list[
     save_trade_news(conn, links)
     save_tags(conn, detectors.run_all(trades, settings, flows) + sequences.sequence_tags(found, trades)
               + news.news_tags(links, events))
+    save_facts(conn, facts.build(
+        trades, flows, settings, bars_by_symbol=load_bars(conn), symbol_specs=specs, sequences=found,
+        links=links, opening_balance=row[0] if row else 0.0, aliases=dict(settings.symbol_aliases),
+    ))
     return trades, flows
+
+
+def save_facts(conn: sqlite3.Connection, built) -> None:
+    """Replace the derived query layers (facts.Facts)."""
+    for table in ("trade_facts", "streaks", "drawdown_episodes", "exposure", "equity_curve"):
+        conn.execute(f"DELETE FROM {table}")
+    t = lambda v: format_time(v) if v else None  # noqa: E731
+    conn.executemany(
+        "INSERT INTO trade_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(f.position_id, f.canonical_symbol, f.month, f.mae, f.mfe, f.minutes_in_profit, f.minutes_in_loss,
+          f.spread_at_open, f.risk_amount, f.planned_rr, f.r_multiple, f.sequence_id, f.streak_id,
+          f.drawdown_episode_id, int(f.news_overlap)) for f in built.trade_facts],
+    )
+    conn.executemany("INSERT INTO streaks VALUES (?, ?, ?, ?, ?, ?)",
+                     [(s.streak_id, s.type, s.length, t(s.start_utc), t(s.end_utc), s.net_pnl) for s in built.streaks])
+    conn.executemany(
+        "INSERT INTO drawdown_episodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(e.episode_id, e.basis, t(e.peak_time_utc), t(e.trough_time_utc), t(e.recovery_time_utc), e.peak_value,
+          e.trough_value, e.depth_abs, e.depth_pct, e.duration_days, e.trade_count, e.news_loss_share,
+          e.added_capital) for e in built.episodes],
+    )
+    conn.executemany(
+        "INSERT INTO exposure VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [(t(e.time_utc), e.symbol, e.long_lots, e.short_lots, e.net_lots, e.gross_lots, e.positions_open)
+         for e in built.exposure],
+    )
+    conn.executemany(
+        "INSERT INTO equity_curve VALUES (?, ?, ?, ?, ?)",
+        [(t(p.time_utc), p.balance, p.floating, p.equity, p.equity_low) for p in built.equity],
+    )
 
 
 def save_news_events(conn: sqlite3.Connection, events) -> int:

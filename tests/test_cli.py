@@ -207,3 +207,14 @@ def test_sequences_command(tmp_path, capsys):
     assert "martingale:" in out and "By depth" in out and "depth  5:" in out
     assert cli.main(["--data-dir", str(tmp_path), "sequences", "--type", "grid", "--min-depth", "50"]) == 0
     assert "None." in capsys.readouterr().out
+
+
+def test_query_command(tmp_path, capsys):
+    write_account(tmp_path, 1234, balance=balance_from_deals(generate_account().deals))
+    assert cli.main(["--data-dir", str(tmp_path), "query", "--examples", "all"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("Q: ") == 14 and "Interpretation:" in out
+    assert cli.main(["--data-dir", str(tmp_path), "query", "{\"entity\": \"streaks\", \"limit\": 2}", "--sql"]) == 0
+    assert "SQL: SELECT" in capsys.readouterr().out
+    assert cli.main(["--data-dir", str(tmp_path), "query", "{\"entity\": \"trades\", \"filters\": [{\"field\": \"comment\", \"op\": \"eq\", \"value\": \"x\"}]}"]) == 2
+    assert "Spec rejected" in capsys.readouterr().out

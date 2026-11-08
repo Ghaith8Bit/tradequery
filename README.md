@@ -88,6 +88,20 @@ docker compose run --rm app news          # results inside vs outside news windo
 - A trade overlaps an event when it is open from 15 minutes before to 60 minutes after a high-importance event for its symbol's currencies (settings.toml `[news]`).
 - Results are worded as "overlapped with", never "caused by". Calendars list scheduled events only; surprise headlines are not covered.
 
+## Asking questions (QuerySpec)
+
+The language model will never write SQL. It fills in a **QuerySpec**: a typed question (entity, filters, time range, group-by, aggregations, named metrics, comparisons, order, limit) that is checked against a whitelist and compiled to parameterized SQL. For now you can write specs yourself:
+
+```bash
+docker compose run --rm app query --examples all          # the build plan's example questions
+docker compose run --rm app query '{"entity": "trades", "filters": [{"field": "hold_minutes", "op": "gt", "value": 240}]}' --sql
+```
+
+- Entities: trades, sequences, streaks, exposure, cash_flows, drawdown_episodes, news_events (`spec.py` lists every field, operator and group-by).
+- Named metrics (win rate, profit factor, R, streaks, ...) are always computed by the tested metric code, never by SQL arithmetic. Comparisons come with sample sizes and a 95% range.
+- Safety: unknown entities, fields, operators or metrics are rejected with a reason; values are always bound parameters; the database is opened read-only; at most 500 rows; a 5-second time limit. Trade comments are not queryable.
+- Every answer starts with an interpretation line (account, filters, time range, timezone), so a misread question is visible.
+
 ## Data and secrets
 
 - Real trade data lives in `data/` (git-ignored). Only synthetic samples are ever committed.
@@ -135,6 +149,11 @@ src/tradequery/
                   sequences.py finds martingale, grid and martingale-grid series
   pricepath.py    from one-minute bars: MAE/MFE, minutes in profit/loss, equity curve and equity drawdown
   news.py         calendar import with clock calibration, trade/event overlap, drawdown attribution
+  facts.py        derived layers stored for querying (per-trade facts, streaks, drawdowns, exposure, equity)
+  spec.py         QuerySpec models and the whitelist
+  compiler.py     spec -> parameterized SQL (SQLAlchemy Core)
+  execute.py      runs a spec read-only; named metrics via metrics.py; interpretation line
+  examples.py     the plan's example questions as specs (tests, and worked examples for the LLM)
 mql5/             ExportCalendar.mq5: exports the MT5 economic calendar
   cli.py          demo | inspect | download | import | compare | metrics | show
 docker/mt5/       Wine image and its setup script
