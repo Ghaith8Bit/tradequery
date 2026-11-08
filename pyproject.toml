@@ -14,6 +14,9 @@ dependencies = [
     "tzdata; sys_platform == 'win32'",
     # MT5 library: only installable on Windows Python, so only inside the Wine image.
     "MetaTrader5; sys_platform == 'win32'",
+    # MetaTrader5 needs numpy, and numpy 2.x crashes under Wine 10
+    # ("unimplemented function ucrtbase.dll.crealf"). 1.26 works.
+    "numpy<2; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

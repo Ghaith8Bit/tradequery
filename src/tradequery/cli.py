@@ -284,3 +284,7 @@ def main(argv=None) -> int:
     except (Mt5Error, CredentialsError, ReportError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2
+
+
+if __name__ == "__main__":  # the Wine container runs `python -m tradequery.cli`
+    sys.exit(main())

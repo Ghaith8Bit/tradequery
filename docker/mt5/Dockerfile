@@ -6,9 +6,10 @@
 FROM debian:bookworm-slim
 
 ARG UID=1000
-# Pinned: the MT5 installer and terminal refuse to run under Wine 11 ("A debugger
-# has been found running in your system"). Wine 10 is the known-good line.
-ARG WINE_VERSION=10.0.0.0~bookworm-1
+# Pinned. Current MT5 terminal builds stop at "A debugger has been found running in
+# your system" under Wine 10 and under Wine 11.0 (stable); WineHQ devel 11.10 runs them.
+ARG WINE_BRANCH=devel
+ARG WINE_VERSION=11.10~bookworm-1
 ENV DEBIAN_FRONTEND=noninteractive \
     WINEARCH=win64 \
     WINEPREFIX=/home/trader/.wine \
@@ -23,8 +24,8 @@ RUN dpkg --add-architecture i386 \
  && wget -NP /etc/apt/sources.list.d/ https://dl.winehq.org/wine-builds/debian/dists/bookworm/winehq-bookworm.sources \
  && apt-get update \
  && apt-get install -y --install-recommends \
-      winehq-stable=${WINE_VERSION} wine-stable=${WINE_VERSION} \
-      wine-stable-amd64=${WINE_VERSION} wine-stable-i386:i386=${WINE_VERSION} \
+      winehq-${WINE_BRANCH}=${WINE_VERSION} wine-${WINE_BRANCH}=${WINE_VERSION} \
+      wine-${WINE_BRANCH}-amd64=${WINE_VERSION} wine-${WINE_BRANCH}-i386:i386=${WINE_VERSION} \
  && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid ${UID} trader \

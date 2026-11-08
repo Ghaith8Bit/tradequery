@@ -20,31 +20,37 @@ start_display() {
 
 wine_python() { wine "$PY_EXE" "$@"; }
 
-# A complete prefix has both the 64-bit and the 32-bit (syswow64) system DLLs and
-# was made by the Wine version in this image (a prefix from another version is rebuilt).
-VERSION_FILE="$WINEPREFIX/.tradequery-wine-version"
-prefix_ready() {
-  [ -f "$WINEPREFIX/drive_c/windows/syswow64/kernel32.dll" ] \
-    && [ "$(cat "$VERSION_FILE" 2>/dev/null)" = "$(wine --version)" ]
-}
-
-create_prefix() {
-  if [ -f "$WINEPREFIX/system.reg" ]; then
-    echo ">> the Wine prefix is incomplete or from another Wine version; rebuilding it"
-    find "$WINEPREFIX" -mindepth 1 -delete  # the prefix folder is the volume mount, so keep it
-  fi
-  echo ">> creating the Wine prefix"
-  # Without these overrides wineboot opens an "install Wine Mono / Gecko?" dialog,
-  # which nobody can click in a headless container, and hangs forever.
-  WINEDLLOVERRIDES="mscoree=;mshtml=" timeout 600 wineboot --init
+# Without these overrides wineboot opens an "install Wine Mono / Gecko?" dialog,
+# which nobody can click in a headless container, and hangs forever.
+wineboot_quiet() {
+  WINEDLLOVERRIDES="mscoree=;mshtml=" timeout 600 wineboot "$@"
   timeout 300 wineserver -w
   wine --version > "$VERSION_FILE"
-  prefix_ready || { echo "Wine prefix creation failed; run 'make mt5-setup' again" >&2; exit 1; }
+}
+
+# A complete prefix has both the 64-bit and the 32-bit (syswow64) system DLLs.
+VERSION_FILE="$WINEPREFIX/.tradequery-wine-version"
+prefix_complete() { [ -f "$WINEPREFIX/drive_c/windows/syswow64/kernel32.dll" ]; }
+
+# Make sure the prefix exists, is complete, and matches this image's Wine version.
+ensure_prefix() {
+  if ! prefix_complete; then
+    if [ -f "$WINEPREFIX/system.reg" ]; then
+      echo ">> the Wine prefix is incomplete (an earlier setup was interrupted); rebuilding it"
+      find "$WINEPREFIX" -mindepth 1 -delete  # the prefix folder is the volume mount, so keep it
+    fi
+    echo ">> creating the Wine prefix"
+    wineboot_quiet --init
+    prefix_complete || { echo "Wine prefix creation failed; run 'make mt5-setup' again" >&2; exit 1; }
+  elif [ "$(cat "$VERSION_FILE" 2>/dev/null)" != "$(wine --version)" ]; then
+    echo ">> upgrading the Wine prefix to $(wine --version) (Python and MT5 stay installed)"
+    wineboot_quiet --update
+  fi
 }
 
 setup() {
   start_display
-  prefix_ready || create_prefix
+  ensure_prefix
 
   if [ ! -f "$WINEPREFIX/drive_c/Python311/python.exe" ]; then
     echo ">> installing Windows Python $PY_VERSION"
@@ -74,6 +80,7 @@ install_package() {
 run_cli() {
   start_display
   [ -f "$MT5_DIR/terminal64.exe" ] || { echo "Run 'make mt5-setup' first." >&2; exit 1; }
+  ensure_prefix  # upgrades the prefix after a Wine version change
   install_package  # picks up code changes after an image rebuild
   export MT5_PATH="${MT5_PATH:-$MT5_WIN_PATH}"
   wine_python -m tradequery.cli "$@"

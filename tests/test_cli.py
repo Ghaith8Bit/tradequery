@@ -91,6 +91,15 @@ def test_a_second_download_adds_nothing_twice(tmp_path, monkeypatch, capsys):
     assert cli.main(["--data-dir", str(tmp_path), "show"]) == 0
 
 
+def test_cli_runs_as_a_module():
+    # The Wine container calls `python -m tradequery.cli`; without a __main__ guard it prints nothing.
+    import subprocess
+    import sys
+
+    result = subprocess.run([sys.executable, "-m", "tradequery.cli", "--help"], capture_output=True, text=True)
+    assert result.returncode == 0 and "inspect" in result.stdout
+
+
 def test_inspect_warns_when_the_login_can_trade(monkeypatch, capsys):
     fake_terminal(monkeypatch, dict(ACCOUNT, trade_allowed=True))
     cli.main(["inspect"])
