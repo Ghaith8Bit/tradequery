@@ -298,6 +298,12 @@ def upsert_deals(conn: sqlite3.Connection, deals: list[Deal], *, overwrite: bool
     return conn.execute("SELECT COUNT(*) FROM deals").fetchone()[0] - before
 
 
+def latest_deal_time(conn: sqlite3.Connection) -> datetime | None:
+    """Time of the newest stored deal (where the next incremental sync picks up), or None."""
+    row = conn.execute("SELECT MAX(time_utc) FROM deals").fetchone()
+    return parse_time(row[0]) if row and row[0] else None
+
+
 def load_deals(conn: sqlite3.Connection) -> list[Deal]:
     return _read_rows(conn, "deals", "time_utc, ticket")
 

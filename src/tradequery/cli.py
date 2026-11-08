@@ -16,7 +16,8 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from . import mt5 as mt5_client
 from .mt5 import Mt5Error
@@ -73,13 +74,35 @@ def _print_specs(specs: list[dict]) -> None:
         )
 
 
-def _read_from_terminal():
-    """Log in, read everything, log out. Returns (account, deals, specs, all_symbol_names)."""
+# An incremental sync re-reads this far before the newest stored deal, so late
+# corrections by the broker are picked up; overlapping deals are upserted by ticket.
+SYNC_OVERLAP = timedelta(days=1)
+
+
+def _sync_start(path: Path, full: bool) -> datetime | None:
+    """Where an incremental sync starts: a day before the newest stored deal (None = everything)."""
+    if full or not path.is_file():
+        return None
+    conn = db.connect(path, read_only=True)
+    try:
+        latest = db.latest_deal_time(conn)
+    finally:
+        conn.close()
+    return latest - SYNC_OVERLAP if latest else None
+
+
+def _read_from_terminal(since_for=None):
+    """Log in, read, log out. Returns (account, deals, specs, all_symbol_names).
+
+    ``since_for(login)`` gives the time to read deals from (None = all history).
+    """
     settings = load_settings()
     mt5 = mt5_client.connect(load_credentials())
     try:
         account = mt5_client.fetch_account(mt5)
-        deals = mt5_client.fetch_deals(mt5, settings.clock)
+        since = since_for(account["login"]) if since_for else None
+        # An empty incremental read just means no new deals: no need to wait for a download.
+        deals = mt5_client.fetch_deals(mt5, settings.clock, date_from=since, wait_seconds=0 if since else 60)
         specs = mt5_client.fetch_symbol_specs(mt5, {d.symbol for d in deals if d.symbol})
         names = mt5_client.list_symbol_names(mt5)
     finally:
@@ -117,8 +140,11 @@ def cmd_inspect(args) -> int:
 
 
 def cmd_download(args) -> int:
-    account, deals, specs, _ = _read_from_terminal()
+    account, deals, specs, _ = _read_from_terminal(
+        since_for=lambda login: _sync_start(db.db_path(login, args.data_dir), args.full)
+    )
     path = db.db_path(account["login"], args.data_dir)
+    since = _sync_start(path, args.full)
     conn = db.connect(path)
     try:
         with conn:  # all or nothing
@@ -142,7 +168,13 @@ def cmd_download(args) -> int:
     finally:
         conn.close()
     _print_account(account)
-    _print_history_summary(deals)
+    if since:
+        print(
+            f"\nIncremental sync: read {len(deals)} deals since {_fmt_time(since)} UTC "
+            f"(a day before the newest stored deal). Use --full to re-read everything."
+        )
+    else:
+        _print_history_summary(deals)
     print(
         f"\nSaved to {path}: {len(stored)} deals ({new} new), {len(trades)} closed trades, "
         f"{len(flows)} cash flows, {len(specs)} symbol specs"
@@ -316,6 +348,8 @@ def main(argv=None) -> int:
     inspect.add_argument("--all-symbols", action="store_true", help="list every symbol on the broker server")
     inspect.set_defaults(func=cmd_inspect)
     download = sub.add_parser("download", help="save the account's history to the data folder")
+    download.add_argument("--full", action="store_true",
+                          help="re-read the whole history instead of only what is new")
     download.set_defaults(func=cmd_download)
     imp = sub.add_parser("import", help="load an MT5 HTML history report into the account's database")
     imp.add_argument("report", help="path to the ReportHistory-<login>.html file")

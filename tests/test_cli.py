@@ -62,7 +62,7 @@ def fake_terminal(monkeypatch, account):
     account = dict(account, balance=balance_from_deals(deals))
     specs = [{"name": "XAUUSD", "trade_contract_size": 100.0, "trade_tick_size": 0.01,
               "trade_tick_value": 1.0, "swap_long": -7.0, "swap_short": 2.0, "digits": 2}]
-    monkeypatch.setattr(cli, "_read_from_terminal", lambda: (account, deals, specs, ["EURUSD", "XAUUSD"]))
+    monkeypatch.setattr(cli, "_read_from_terminal", lambda **kw: (account, deals, specs, ["EURUSD", "XAUUSD"]))
     return deals
 
 
@@ -95,7 +95,7 @@ def test_download_infers_the_opening_balance_of_a_partial_history(tmp_path, monk
     deals = generate_account().deals
     later = deals[3:]  # the broker kept only part of the history
     account = dict(ACCOUNT, balance=balance_from_deals(deals))
-    monkeypatch.setattr(cli, "_read_from_terminal", lambda: (account, later, [], []))
+    monkeypatch.setattr(cli, "_read_from_terminal", lambda **kw: (account, later, [], []))
     assert cli.main(["--data-dir", str(tmp_path), "download"]) == 0
     out = capsys.readouterr().out
     opening = round(balance_from_deals(deals) - balance_from_deals(later), 2)
@@ -127,3 +127,53 @@ def test_inspect_confirms_a_read_only_login_and_lists_symbols(monkeypatch, capsy
     assert "read-only (investor)" in out
     assert "XAUUSD" in out and "EURUSD, XAUUSD" in out
     assert "Symbols traded:" in out and "Magic numbers:" in out
+
+
+def test_second_download_reads_only_from_a_day_before_the_newest_deal(tmp_path, monkeypatch, capsys):
+    deals = generate_account().deals
+    first, later = deals[:60], deals[50:]  # the second read overlaps the first by 10 deals
+    account = dict(ACCOUNT, balance=balance_from_deals(deals))
+    asked = []
+
+    def terminal(batch):
+        def read(since_for=None):
+            asked.append(since_for(1234))
+            return account, batch, [], []
+        return read
+
+    monkeypatch.setattr(cli, "_read_from_terminal", terminal(first))
+    cli.main(["--data-dir", str(tmp_path), "download"])
+    monkeypatch.setattr(cli, "_read_from_terminal", terminal(later))
+    assert cli.main(["--data-dir", str(tmp_path), "download"]) == 0
+    out = capsys.readouterr().out
+
+    assert asked[0] is None  # nothing stored yet: read everything
+    assert asked[1] == first[-1].time_utc - cli.SYNC_OVERLAP
+    assert f"Incremental sync: read {len(later)} deals since" in out
+    assert f"{len(deals)} deals ({len(deals) - 60} new)" in out  # the overlap is not duplicated
+    assert out.rstrip().count("difference 0.00") == 2
+
+
+def test_full_flag_rereads_everything(tmp_path, monkeypatch):
+    deals = generate_account().deals
+    account = dict(ACCOUNT, balance=balance_from_deals(deals))
+    asked = []
+
+    def read(since_for=None):
+        asked.append(since_for(1234))
+        return account, deals, [], []
+
+    monkeypatch.setattr(cli, "_read_from_terminal", read)
+    cli.main(["--data-dir", str(tmp_path), "download"])
+    cli.main(["--data-dir", str(tmp_path), "download", "--full"])
+    assert asked == [None, None]
+
+
+def test_latest_deal_time_is_the_newest_stored_deal(tmp_path):
+    deals = generate_account().deals
+    conn = db.connect(db.db_path(9, tmp_path))
+    assert db.latest_deal_time(conn) is None
+    with conn:
+        db.upsert_deals(conn, deals)
+    assert db.latest_deal_time(conn) == max(d.time_utc for d in deals)
+    conn.close()
