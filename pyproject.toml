@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradequery"
+version = "0.2.0"
+description = "Ask plain-English questions about your MT5 trade history and get verified answers."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    # Windows (and so Wine) has no system timezone database; zoneinfo needs this there.
+    "tzdata; sys_platform == 'win32'",
+    # MT5 library: only installable on Windows Python, so only inside the Wine image.
+    "MetaTrader5; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+tradequery = "tradequery.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+tradequery = ["settings.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

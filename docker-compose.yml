@@ -1,0 +1,27 @@
+services:
+  # Everything except the MT5 sync: demo, show, tests (and later the API).
+  app:
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+    volumes:
+      - ./data:/data
+
+  # MetaTrader 5 + Windows Python under Wine. Only used to download history.
+  mt5:
+    build:
+      context: .
+      dockerfile: docker/mt5/Dockerfile
+      args:
+        UID: ${UID:-1000}
+    platform: linux/amd64
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data
+      - mt5-wine:/home/trader/.wine
+
+volumes:
+  mt5-wine:

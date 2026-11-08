@@ -1,0 +1,28 @@
+# Real data and secrets: never commit these.
+data/
+*.db
+*.sqlite
+*.sqlite3
+ReportHistory*
+.env
+.env.*
+!.env.example
+
+# Private planning docs and Windows download metadata
+*.docx
+*:Zone.Identifier
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,27 @@
+# TradeQuery settings. Thresholds and rules live here so they can be tuned
+# without code changes. Nothing secret goes in this file; credentials belong in
+# the git-ignored .env file or the OS keyring.
+
+[time]
+# How the broker's server clock relates to UTC.
+#   "ny_close": New York time + 7h (UTC+2 winter, UTC+3 summer). Most forex brokers.
+#   "fixed":    a constant offset, set fixed_offset_hours below.
+# Verify with one known event (a past NFP release) for each broker.
+server_clock = "ny_close"
+fixed_offset_hours = 2
+
+# Zone used for "local time" in answers.
+local_timezone = "Asia/Damascus"
+
+[metrics]
+# A trade whose net profit is within this amount (account currency) of zero is
+# break-even: not a win, not a loss, and ignored by streaks by default.
+break_even_tolerance = 0.0
+
+[sessions]
+# Trading sessions as [start, end) hours in UTC. A trade is labeled with every
+# session that contains its open hour, joined in this order (for example
+# "london_new_york"), or "off_hours" when none does.
+asia = [0, 8]
+london = [7, 16]
+new_york = [12, 21]
