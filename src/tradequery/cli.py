@@ -3,6 +3,7 @@
   tradequery demo        print a synthetic account (no MT5, no credentials)
   tradequery inspect     log in to MT5; show account, symbols, history summary
   tradequery download    save account, deals and symbol specs to data/accounts/<login>.db
+  tradequery import FILE load an MT5 HTML history report into data/accounts/<login>.db
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -20,6 +21,7 @@ from . import mt5 as mt5_client
 from .mt5 import Mt5Error
 from .settings import CredentialsError, load_credentials, load_settings
 from . import db
+from .importers.mt5_report import ReportError, parse_report
 from .synthetic import generate_account
 from .trades import balance_curve, balance_from_deals, build_trades, derive_trades, extract_cash_flows
 
@@ -83,10 +85,11 @@ def _read_from_terminal():
     return account, deals, specs, names
 
 
-def _print_balance_check(deals, mt5_balance: float) -> bool:
-    computed = balance_from_deals(deals)
+def _print_balance_check(deals, mt5_balance: float, opening_balance: float = 0.0) -> bool:
+    computed = round(opening_balance + balance_from_deals(deals), 2)
     diff = round(computed - mt5_balance, 2)
-    print(f"\nBalance check: computed from deals {computed:.2f} | MT5 balance at download {mt5_balance:.2f} | difference {diff:.2f}")
+    start = f"opening {opening_balance:.2f} + deals" if opening_balance else "computed from deals"
+    print(f"\nBalance check: {start} {computed:.2f} | MT5 balance {mt5_balance:.2f} | difference {diff:.2f}")
     if abs(diff) < 0.01:
         print("OK: the deals add up to the balance MT5 reports.")
         return True
@@ -173,7 +176,7 @@ def cmd_show(args) -> int:
     print(f"Wins {wins}, losses {losses}, break-even {len(trades) - wins - losses}")
     if trades:
         print(f"Net profit of closed trades: {sum(t.net_profit for t in trades):.2f}")
-        print(f"Balance after the last trade: {balance_curve(trades, flows)[-1].balance:.2f}")
+        print(f"Balance after the last closed trade: {trades[-1].balance_after:.2f}")
 
     shown = trades[-args.rows :]
     print(f"\nLast {len(shown)} trades:")
@@ -184,8 +187,53 @@ def cmd_show(args) -> int:
             f"{t.net_profit:>9.2f} {t.hold_minutes:>6.0f} {t.weekday:<3} {t.hour:>2} {t.session:<16} "
             f"{t.outcome:<9} {t.balance_after:>10.2f}"
         )
-    ok = _print_balance_check(deals, account["balance"])
+    ok = _print_balance_check(deals, account["balance"], account["opening_balance"])
     return 0 if ok else 1
+
+
+def cmd_import(args) -> int:
+    settings = load_settings()
+    report = parse_report(args.report, settings.clock)
+    path = db.db_path(report.login, args.data_dir)
+    conn = db.connect(path)
+    try:
+        with conn:  # all or nothing
+            new = db.upsert_deals(conn, report.deals, overwrite=False)
+            try:
+                db.load_account(conn)
+                kept = True  # a synced account row is richer than the report's; keep it
+            except LookupError:
+                kept = False
+                db.save_account(
+                    conn,
+                    dict(report.account(), opening_balance=report.opening_balance),
+                    earliest_history=report.deals[0].time_utc,
+                    synced_at=datetime.now(timezone.utc),
+                )
+            trades, flows = db.rebuild_derived(conn, settings)
+            account = db.load_account(conn)
+            stored = db.load_deals(conn)
+    finally:
+        conn.close()
+
+    print(f"Report for account {report.login} on {report.server} ({report.currency}, {report.margin_mode})")
+    print(f"Deals {_fmt_time(report.deals[0].time_utc)} to {_fmt_time(report.deals[-1].time_utc)} UTC")
+    print(f"Balance {report.opening_balance:.2f} before the first deal, {report.closing_balance:.2f} after the last")
+    print("Running balance: every deal matches the report's Balance column.")
+    print(
+        f"\nSaved to {path}: {len(report.deals)} deals in the report ({new} new), "
+        f"{len(trades)} closed trades, {len(flows)} cash flows"
+    )
+    if kept:
+        print("The account was already synced; its stored deals and account facts were kept.")
+    if report.unmatched_exits:
+        print(
+            f"{report.unmatched_exits} exit deals close positions opened before the report starts; "
+            "they count toward the balance but not as closed trades."
+        )
+    _print_balance_check(stored, account["balance"], account["opening_balance"])
+    print("\nNext: tradequery show")
+    return 0
 
 
 def cmd_demo(args) -> int:
@@ -222,6 +270,9 @@ def main(argv=None) -> int:
     inspect.set_defaults(func=cmd_inspect)
     download = sub.add_parser("download", help="save the account's history to the data folder")
     download.set_defaults(func=cmd_download)
+    imp = sub.add_parser("import", help="load an MT5 HTML history report into the account's database")
+    imp.add_argument("report", help="path to the ReportHistory-<login>.html file")
+    imp.set_defaults(func=cmd_import)
     show = sub.add_parser("show", help="analyse a downloaded account without MT5")
     show.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
     show.add_argument("--rows", type=int, default=20, help="how many recent trades to print")
@@ -230,6 +281,6 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (Mt5Error, CredentialsError) as error:
+    except (Mt5Error, CredentialsError, ReportError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2

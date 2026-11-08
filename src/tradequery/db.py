@@ -26,7 +26,7 @@ from dataclasses import fields
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .models import CashFlow, Deal, Trade
+from .models import TRADE_TYPES, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
@@ -46,6 +46,7 @@ _ACCOUNT_COLUMNS = (
     "trade_allowed INTEGER",
     "balance REAL",
     "equity REAL",
+    "opening_balance REAL NOT NULL DEFAULT 0",  # balance before the first stored deal
     "earliest_history_utc TEXT",
     "synced_at_utc TEXT",
 )
@@ -230,7 +231,12 @@ def _read_rows(conn: sqlite3.Connection, table: str, order_by: str) -> list:
 
 def save_account(conn: sqlite3.Connection, account: dict, *, earliest_history: datetime | None,
                  synced_at: datetime) -> None:
-    """Upsert the account row from mt5.fetch_account output. The holder's name is dropped."""
+    """Upsert the account row from mt5.fetch_account output. The holder's name is dropped.
+
+    ``opening_balance`` is 0 for a full history (the live sync); a report that
+    starts later passes the balance before its first deal.
+    """
+    trade_allowed = account.get("trade_allowed")
     row = {
         "account_id": int(account["login"]),
         "broker": account.get("company"),
@@ -239,9 +245,10 @@ def save_account(conn: sqlite3.Connection, account: dict, *, earliest_history: d
         "leverage": account.get("leverage"),
         "margin_mode": account.get("margin_mode"),
         "trade_mode": account.get("trade_mode"),
-        "trade_allowed": int(bool(account.get("trade_allowed"))),
+        "trade_allowed": None if trade_allowed is None else int(bool(trade_allowed)),
         "balance": account.get("balance"),
         "equity": account.get("equity"),
+        "opening_balance": float(account.get("opening_balance", 0.0)),
         "earliest_history_utc": format_time(earliest_history) if earliest_history else None,
         "synced_at_utc": format_time(synced_at),
     }
@@ -276,9 +283,17 @@ def load_symbols(conn: sqlite3.Connection) -> list[dict]:
 # ---------------------------------------------------------------- deals and derived tables
 
 
-def upsert_deals(conn: sqlite3.Connection, deals: list[Deal]) -> int:
-    """Insert or update deals by ticket. Returns how many tickets were new."""
+def upsert_deals(conn: sqlite3.Connection, deals: list[Deal], *, overwrite: bool = True) -> int:
+    """Insert deals by ticket. Returns how many tickets were new.
+
+    With ``overwrite`` (the live sync) a stored deal is replaced. Without it
+    (report import) stored deals are kept, so a report, which lacks magic
+    numbers and deal reasons, never replaces richer synced rows.
+    """
     before = conn.execute("SELECT COUNT(*) FROM deals").fetchone()[0]
+    if not overwrite:
+        stored = {row[0] for row in conn.execute("SELECT ticket FROM deals")}
+        deals = [d for d in deals if d.ticket not in stored]
     _write_rows(conn, "deals", deals, replace_all=False)
     return conn.execute("SELECT COUNT(*) FROM deals").fetchone()[0] - before
 
@@ -298,8 +313,19 @@ def load_trades(conn: sqlite3.Connection) -> list[Trade]:
 def rebuild_derived(conn: sqlite3.Connection, settings: Settings) -> tuple[list[Trade], list[CashFlow]]:
     """Recompute cash_flows and trades from every stored deal, replacing the old rows."""
     deals = load_deals(conn)
+    row = conn.execute("SELECT opening_balance FROM accounts").fetchone()
     flows = extract_cash_flows(deals)
-    trades = derive_trades(build_trades(deals), flows, settings)
+    closed = build_trades(deals)
+    # Exits of positions that are not closed trades (opened before the history
+    # starts, or only partly closed) still move the balance, so the running
+    # balance includes them. They are not cash flows and are not stored as such.
+    closed_ids = {t.position_id for t in closed}
+    stray_exits = [
+        CashFlow(d.ticket, d.time_utc, "position_exit", round(d.profit + d.commission + d.swap, 2))
+        for d in deals
+        if d.type in TRADE_TYPES and d.entry != "in" and d.position_id not in closed_ids
+    ]
+    trades = derive_trades(closed, flows + stray_exits, settings, initial_balance=row[0] if row else 0.0)
     _write_rows(conn, "cash_flows", flows, replace_all=True)
     _write_rows(conn, "trades", trades, replace_all=True)
     return trades, flows
