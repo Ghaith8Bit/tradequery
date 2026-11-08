@@ -17,6 +17,7 @@ Conversions that matter:
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 
 from .settings import Mt5Credentials
@@ -102,13 +103,30 @@ def fetch_account(mt5) -> dict:
 
 
 def fetch_deals(
-    mt5, clock: ServerClock, date_from: datetime | None = None, date_to: datetime | None = None
+    mt5,
+    clock: ServerClock,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    *,
+    wait_seconds: float = 60,
+    poll_seconds: float = 5,
+    sleep=time.sleep,
 ) -> list[Deal]:
-    """Every deal in the date range (default: all history), oldest first."""
+    """Every deal in the date range (default: all history), oldest first.
+
+    Right after a terminal's first login to an account the history is still
+    downloading and comes back empty, so an empty result is retried for up to
+    ``wait_seconds`` before it is accepted as an account with no deals.
+    """
     date_from = date_from or WIDE_START
     date_to = date_to or datetime.now(timezone.utc) + timedelta(days=2)
 
     raw_deals = mt5.history_deals_get(date_from, date_to)
+    waited = 0.0
+    while raw_deals is not None and len(raw_deals) == 0 and waited < wait_seconds:
+        sleep(poll_seconds)
+        waited += poll_seconds
+        raw_deals = mt5.history_deals_get(date_from, date_to)
     if raw_deals is None:
         raise Mt5Error(f"could not read the deal history: {mt5.last_error()}")
     stops = {o.ticket: (float(o.sl), float(o.tp)) for o in (mt5.history_orders_get(date_from, date_to) or [])}

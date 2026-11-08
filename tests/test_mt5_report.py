@@ -1,5 +1,6 @@
 """MT5 HTML report importer, on a small made-up report in the terminal's exact layout."""
 
+from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
@@ -218,3 +219,29 @@ def test_a_bad_report_is_a_clean_error(tmp_path, capsys):
 def test_settings_clock_is_used_for_report_times(report_file):
     report = parse_report(report_file, load_settings().clock)  # ny_close: UTC+3 in September
     assert report.deals[0].time_utc == datetime(2026, 8, 31, 22, 0, tzinfo=UTC)
+
+
+def test_compare_finds_the_report_and_the_synced_history_equal(report_file, tmp_path, capsys):
+    report = parse_report(report_file, load_settings().clock)
+    synced = [replace(d, magic=12345, reason="expert") if d.ticket == 502 else d for d in report.deals]
+    conn = db.connect(db.db_path(11112222, tmp_path))
+    with conn:
+        db.upsert_deals(conn, synced)  # richer fields the report lacks are not compared
+    conn.close()
+    assert cli.main(["--data-dir", str(tmp_path), "compare", str(report_file)]) == 0
+    out = capsys.readouterr().out
+    assert "Compared 7 deals and 2 closed trades" in out and "OK: the report and the stored history" in out
+
+
+def test_compare_reports_differences_and_missing_deals(report_file, tmp_path, capsys):
+    report = parse_report(report_file, load_settings().clock)
+    synced = [replace(d, profit=4.0) if d.ticket == 503 else d for d in report.deals if d.ticket != 507]
+    conn = db.connect(db.db_path(11112222, tmp_path))
+    with conn:
+        db.upsert_deals(conn, synced)
+    conn.close()
+    assert cli.main(["--data-dir", str(tmp_path), "compare", str(report_file)]) == 1
+    out = capsys.readouterr().out
+    assert "Deals only in the report: 1 (first: 507)" in out
+    assert "deal 503: profit report=5.0 sync=4.0" in out
+    assert "trade 902: profit report=5.0 sync=4.0" in out

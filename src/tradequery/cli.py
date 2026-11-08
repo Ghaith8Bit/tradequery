@@ -4,6 +4,7 @@
   tradequery inspect     log in to MT5; show account, symbols, history summary
   tradequery download    save account, deals and symbol specs to data/accounts/<login>.db
   tradequery import FILE load an MT5 HTML history report into data/accounts/<login>.db
+  tradequery compare FILE check a report against the stored (synced) history
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -21,6 +22,7 @@ from . import mt5 as mt5_client
 from .mt5 import Mt5Error
 from .settings import CredentialsError, load_credentials, load_settings
 from . import db
+from .crosscheck import compare
 from .importers.mt5_report import ReportError, parse_report
 from .synthetic import generate_account
 from .trades import balance_curve, balance_from_deals, build_trades, derive_trades, extract_cash_flows
@@ -120,11 +122,18 @@ def cmd_download(args) -> int:
     conn = db.connect(path)
     try:
         with conn:  # all or nothing
+            try:
+                previous_opening = db.load_account(conn)["opening_balance"]
+            except LookupError:
+                previous_opening = None
             new = db.upsert_deals(conn, deals)
             stored = db.load_deals(conn)
+            # Brokers keep a limited history. Whatever the stored deals do not
+            # explain was already in the account before the first one.
+            opening = round(account["balance"] - balance_from_deals(stored), 2)
             db.save_account(
                 conn,
-                account,
+                dict(account, opening_balance=opening),
                 earliest_history=stored[0].time_utc if stored else None,
                 synced_at=datetime.now(timezone.utc),
             )
@@ -138,7 +147,19 @@ def cmd_download(args) -> int:
         f"\nSaved to {path}: {len(stored)} deals ({new} new), {len(trades)} closed trades, "
         f"{len(flows)} cash flows, {len(specs)} symbol specs"
     )
-    _print_balance_check(stored, account["balance"])
+    if abs(opening) >= 0.01 and stored:
+        print(
+            f"\nThe broker's history starts at {_fmt_time(stored[0].time_utc)} UTC with the account already "
+            f"holding {opening:.2f} (MT5 balance minus every stored deal). Running balances start from there."
+        )
+        if previous_opening and abs(previous_opening - opening) >= 0.01:
+            print(
+                f"WARNING: an imported report put the opening balance at {previous_opening:.2f}. "
+                "Some deals may be missing from one of the two sources."
+            )
+        elif previous_opening:
+            print("This matches the opening balance from the imported report.")
+    _print_balance_check(stored, account["balance"], opening)
     print("\nNext: tradequery show")
     return 0
 
@@ -189,6 +210,32 @@ def cmd_show(args) -> int:
         )
     ok = _print_balance_check(deals, account["balance"], account["opening_balance"])
     return 0 if ok else 1
+
+
+def cmd_compare(args) -> int:
+    report = parse_report(args.report, load_settings().clock)
+    conn = db.connect(db.db_path(report.login, args.data_dir), read_only=True)
+    try:
+        stored = db.load_deals(conn)
+    finally:
+        conn.close()
+    result = compare(report.deals, stored)
+    print(f"Report for account {report.login}: {len(report.deals)} deals, "
+          f"{_fmt_time(report.deals[0].time_utc)} to {_fmt_time(report.deals[-1].time_utc)} UTC")
+    print(f"Compared {result.deals_compared} deals and {result.trades_compared} closed trades with the stored history.")
+    for label, items in (("Deals only in the report", result.only_in_report),
+                         ("Deals only in the stored history", result.only_in_store)):
+        if items:
+            print(f"{label}: {len(items)} (first: {', '.join(map(str, items[:10]))})")
+    for line in (result.deal_differences + result.trade_differences)[: args.show]:
+        print("  " + line)
+    differences = len(result.deal_differences) + len(result.trade_differences)
+    if differences:
+        print(f"{differences} field differences in total.")
+    if result.ok:
+        print("OK: the report and the stored history give the same deals and the same trades.")
+        return 0
+    return 1
 
 
 def cmd_import(args) -> int:
@@ -273,6 +320,10 @@ def main(argv=None) -> int:
     imp = sub.add_parser("import", help="load an MT5 HTML history report into the account's database")
     imp.add_argument("report", help="path to the ReportHistory-<login>.html file")
     imp.set_defaults(func=cmd_import)
+    comp = sub.add_parser("compare", help="check an MT5 HTML report against the stored (synced) history")
+    comp.add_argument("report", help="path to the ReportHistory-<login>.html file")
+    comp.add_argument("--show", type=int, default=20, help="how many differences to print")
+    comp.set_defaults(func=cmd_compare)
     show = sub.add_parser("show", help="analyse a downloaded account without MT5")
     show.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
     show.add_argument("--rows", type=int, default=20, help="how many recent trades to print")

@@ -87,6 +87,21 @@ def test_balance_operations_keep_their_amount_in_profit():
     assert [(f.type, f.amount) for f in flows] == [("deposit", 1000.0), ("credit", 50.0), ("other", -3.0)]
 
 
+def test_empty_history_is_retried_while_the_terminal_downloads_it():
+    fake = FakeMt5(deals=[ENTRY, EXIT], orders=ORDERS)
+    replies = [(), (), [ENTRY, EXIT]]  # first login: history arrives after two polls
+    fake.history_deals_get = lambda a, b: replies.pop(0)
+    naps = []
+    deals = mt5_client.fetch_deals(fake, CLOCK, sleep=naps.append)
+    assert len(deals) == 2 and naps == [5, 5]
+
+
+def test_an_account_with_no_deals_gives_up_after_the_wait():
+    naps = []
+    assert mt5_client.fetch_deals(FakeMt5(deals=[]), CLOCK, wait_seconds=15, sleep=naps.append) == []
+    assert naps == [5, 5, 5]
+
+
 def test_history_error_is_reported():
     with pytest.raises(Mt5Error, match="deal history"):
         mt5_client.fetch_deals(FakeMt5(deals=None), CLOCK)

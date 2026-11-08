@@ -91,6 +91,20 @@ def test_a_second_download_adds_nothing_twice(tmp_path, monkeypatch, capsys):
     assert cli.main(["--data-dir", str(tmp_path), "show"]) == 0
 
 
+def test_download_infers_the_opening_balance_of_a_partial_history(tmp_path, monkeypatch, capsys):
+    deals = generate_account().deals
+    later = deals[3:]  # the broker kept only part of the history
+    account = dict(ACCOUNT, balance=balance_from_deals(deals))
+    monkeypatch.setattr(cli, "_read_from_terminal", lambda: (account, later, [], []))
+    assert cli.main(["--data-dir", str(tmp_path), "download"]) == 0
+    out = capsys.readouterr().out
+    opening = round(balance_from_deals(deals) - balance_from_deals(later), 2)
+    assert f"already holding {opening:.2f}" in out and "difference 0.00" in out
+    conn = db.connect(db.db_path(1234, tmp_path), read_only=True)
+    assert db.load_account(conn)["opening_balance"] == opening
+    conn.close()
+
+
 def test_cli_runs_as_a_module():
     # The Wine container calls `python -m tradequery.cli`; without a __main__ guard it prints nothing.
     import subprocess
