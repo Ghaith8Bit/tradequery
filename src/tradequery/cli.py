@@ -8,6 +8,8 @@
   tradequery metrics     named metrics (win rate, profit factor, streaks, drawdown, ...)
   tradequery tags        detector tags with evidence (revenge, overtrading, no stop loss, oversized, ...)
   tradequery sequences   martingale and grid sequences: depth, lot multiplier, result
+  tradequery import-calendar [FILE]   load the economic calendar export and join it to trades
+  tradequery news        trades and drawdowns that overlapped scheduled news
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -24,10 +26,10 @@ from pathlib import Path
 
 from . import mt5 as mt5_client
 from .mt5 import Mt5Error
-from .settings import CredentialsError, load_credentials, load_settings
+from .settings import CredentialsError, data_dir, load_credentials, load_settings
 from dataclasses import dataclass, field
 
-from . import db, detectors, metrics, pricepath
+from . import db, detectors, metrics, news, pricepath
 from .crosscheck import compare
 from .importers.mt5_report import ReportError, parse_report
 from .synthetic import generate_account
@@ -514,6 +516,84 @@ def cmd_sequences(args) -> int:
     return 0
 
 
+def cmd_import_calendar(args) -> int:
+    settings = load_settings()
+    login = _pick_login(args)
+    path = args.file or Path(args.data_dir or data_dir()) / "news" / "calendar.csv"
+    if not Path(path).is_file():
+        raise SystemExit(f"No calendar export at {path}. Run: make calendar FROM=YYYY.MM.DD TO=YYYY.MM.DD")
+    events, note = news.parse_calendar(path, settings.news, settings.clock)
+    conn = db.connect(db.db_path(login, args.data_dir))
+    try:
+        with conn:
+            new = db.save_news_events(conn, events)
+            trades, _ = db.rebuild_derived(conn, settings)
+            links = db.load_trade_news(conn)
+    finally:
+        conn.close()
+    floor = news.IMPORTANCE.get(settings.news.min_importance, 3)
+    counted = sum(1 for e in events if news.IMPORTANCE.get(e.importance, 0) >= floor)
+    print(f"Calendar: {len(events)} events ({new} new), {counted} of importance {settings.news.min_importance} or above")
+    if events:
+        print(f"  {_fmt_time(events[0].time_utc)} to {_fmt_time(events[-1].time_utc)} UTC")
+    print(f"  Time alignment: {note}")
+    overlapping = len({l.position_id for l in links})
+    print(f"Account {login}: {overlapping} of {len(trades)} closed trades overlapped an event "
+          f"({settings.news.minutes_before:g} min before to {settings.news.minutes_after:g} min after)")
+    print("\nNext: tradequery news")
+    return 0
+
+
+def cmd_news(args) -> int:
+    settings = load_settings()
+    login = _pick_login(args)
+    conn = db.connect(db.db_path(login, args.data_dir), read_only=True)
+    try:
+        events = db.load_news_events(conn)
+        links = db.load_trade_news(conn)
+        trades = db.load_trades(conn)
+        flows = db.load_cash_flows(conn)
+    finally:
+        conn.close()
+    if not events:
+        print("No calendar stored. Run: make news FROM=YYYY.MM.DD TO=YYYY.MM.DD")
+        return 0
+    by_id = {e.value_id: e for e in events}
+    by_pid = {t.position_id: t for t in trades}
+    inside, outside = news.inside_outside(trades, links)
+    print(f"Account {login}: news overlap ({settings.news.min_importance}-importance events, "
+          f"{settings.news.minutes_before:g} min before to {settings.news.minutes_after:g} min after)")
+    print("Overlap is timing only: it does not mean the news caused the result.\n")
+    for label, s in (("Inside news windows", inside), ("Outside news windows", outside)):
+        print(f"  {label:<22} {s.trades:>5} trades, win rate {_pct(s.win_rate)}, net {_money(s.net)}")
+    phases = {}
+    for l in links:
+        phases[l.phase] = phases.get(l.phase, 0) + 1
+    if phases:
+        print("  Overlaps by phase: " + ", ".join(f"{k} {v}" for k, v in sorted(phases.items())))
+    per_event: dict[int, set[int]] = {}
+    for l in links:
+        per_event.setdefault(l.value_id, set()).add(l.position_id)
+    if per_event:
+        print("\nEvents with the most overlapping trades:")
+        top = sorted(per_event.items(), key=lambda kv: -len(kv[1]))[: args.limit]
+        for vid, pids in top:
+            e = by_id[vid]
+            net = sum(by_pid[p].net_profit for p in pids if p in by_pid)
+            print(f"  {_fmt_time(e.time_utc)} UTC  {e.currency} {e.name:<40.40} {len(pids):>4} trades, net {net:>10,.2f}")
+    episodes = sorted(metrics.drawdown_episodes(trades, flows), key=lambda e: -e.depth)[:3]
+    if episodes:
+        print("\nLargest drawdowns (closed trades) and the news they overlapped:")
+        for ep in episodes:
+            share, vids = news.news_loss_share(ep.position_ids, by_pid, links)
+            start = _fmt_time(ep.peak_time) if ep.peak_time else "start"
+            names = sorted({f"{by_id[v].name} ({by_id[v].time_utc:%m-%d})" for v in vids})
+            print(f"  {_money(ep.depth)} from {start} to {_fmt_time(ep.trough_time)}: "
+                  f"{_pct(share)} of the loss came from trades that overlapped news"
+                  + (f": {', '.join(names[:4])}" + (" ..." if len(names) > 4 else "") if names else ""))
+    return 0
+
+
 def cmd_compare(args) -> int:
     report = parse_report(args.report, load_settings().clock)
     conn = db.connect(db.db_path(report.login, args.data_dir), read_only=True)
@@ -644,6 +724,14 @@ def main(argv=None) -> int:
     sq.add_argument("--sort", choices=("depth", "net", "time"), default="depth", help="order of the list")
     sq.add_argument("--limit", type=int, default=15, help="how many sequences to list")
     sq.set_defaults(func=cmd_sequences)
+    ic = sub.add_parser("import-calendar", help="load an economic calendar export and join it to the trades")
+    ic.add_argument("file", nargs="?", help="the export from make calendar (default: <data>/news/calendar.csv)")
+    ic.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
+    ic.set_defaults(func=cmd_import_calendar)
+    nw = sub.add_parser("news", help="trades and drawdowns that overlapped scheduled news")
+    nw.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
+    nw.add_argument("--limit", type=int, default=10, help="how many events to list")
+    nw.set_defaults(func=cmd_news)
     comp = sub.add_parser("compare", help="check an MT5 HTML report against the stored (synced) history")
     comp.add_argument("report", help="path to the ReportHistory-<login>.html file")
     comp.add_argument("--show", type=int, default=20, help="how many differences to print")
@@ -656,7 +744,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (Mt5Error, CredentialsError, ReportError) as error:
+    except (Mt5Error, CredentialsError, ReportError, news.CalendarError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 2
 

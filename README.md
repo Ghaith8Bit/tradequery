@@ -75,6 +75,19 @@ docker compose run --rm app compare /data/ReportHistory-<login>.html
 
 This compares every deal and every closed trade in the report's time span with the stored history, field by field. Both sources of the same account must agree.
 
+## News overlap
+
+```bash
+make news FROM=2026.08.01 TO=2026.10.31   # export the MT5 economic calendar and join it to the trades
+docker compose run --rm app news          # results inside vs outside news windows, drawdown attribution
+```
+
+`make news` compiles `mql5/ExportCalendar.mq5` in the Wine terminal, runs it as a start-up script, and imports the file it writes (`data/news/calendar.csv`). You can also run the script yourself in a Windows MT5 terminal and import its file with `import-calendar <file>`.
+
+- **Time alignment is checked, not assumed.** A broker's calendar clock can differ from its trade server clock. The importer calibrates it on US Nonfarm Payrolls, which is always released at 08:30 New York time, and reports the clock it found.
+- A trade overlaps an event when it is open from 15 minutes before to 60 minutes after a high-importance event for its symbol's currencies (settings.toml `[news]`).
+- Results are worded as "overlapped with", never "caused by". Calendars list scheduled events only; surprise headlines are not covered.
+
 ## Data and secrets
 
 - Real trade data lives in `data/` (git-ignored). Only synthetic samples are ever committed.
@@ -121,6 +134,8 @@ src/tradequery/
   detectors/      one rule per file, each tag with evidence; thresholds in settings.toml [detectors];
                   sequences.py finds martingale, grid and martingale-grid series
   pricepath.py    from one-minute bars: MAE/MFE, minutes in profit/loss, equity curve and equity drawdown
+  news.py         calendar import with clock calibration, trade/event overlap, drawdown attribution
+mql5/             ExportCalendar.mq5: exports the MT5 economic calendar
   cli.py          demo | inspect | download | import | compare | metrics | show
 docker/mt5/       Wine image and its setup script
 tests/            unit tests (synthetic data and a made-up report; no real accounts)

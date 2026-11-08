@@ -27,12 +27,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import detectors
+from . import news
 from .detectors import sequences
 from .models import TRADE_TYPES, Bar, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _SQL_TYPES = {"int": "INTEGER", "float": "REAL", "str": "TEXT", "datetime": "TEXT", "bool": "INTEGER"}
 
@@ -173,6 +174,15 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE TABLE sequence_trades (sequence_id INTEGER NOT NULL, position_id INTEGER NOT NULL, "
         "level INTEGER NOT NULL, PRIMARY KEY (sequence_id, position_id))",
         "CREATE INDEX sequence_trades_position ON sequence_trades (position_id)",
+    ),
+    5: (
+        # Calendar events (UTC) and which trades overlapped which events.
+        "CREATE TABLE news_events (value_id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, "
+        "time_utc TEXT NOT NULL, currency TEXT NOT NULL, importance TEXT NOT NULL, name TEXT NOT NULL, "
+        "actual REAL, forecast REAL, previous REAL)",
+        "CREATE INDEX news_events_time ON news_events (time_utc)",
+        "CREATE TABLE trade_news (position_id INTEGER NOT NULL, value_id INTEGER NOT NULL, "
+        "minutes_to_event REAL NOT NULL, phase TEXT NOT NULL, PRIMARY KEY (position_id, value_id))",
     ),
 }
 
@@ -417,8 +427,41 @@ def rebuild_derived(conn: sqlite3.Connection, settings: Settings) -> tuple[list[
     _write_rows(conn, "trades", trades, replace_all=True)
     found = sequences.find_sequences(trades, settings.detectors)
     save_sequences(conn, found)
-    save_tags(conn, detectors.run_all(trades, settings, flows) + sequences.sequence_tags(found, trades))
+    events = load_news_events(conn)
+    specs = {s["symbol"]: s for s in load_symbols(conn)}
+    links = news.join(trades, events, settings.news, specs) if events else []
+    save_trade_news(conn, links)
+    save_tags(conn, detectors.run_all(trades, settings, flows) + sequences.sequence_tags(found, trades)
+              + news.news_tags(links, events))
     return trades, flows
+
+
+def save_news_events(conn: sqlite3.Connection, events) -> int:
+    """Insert or replace calendar events (news.NewsEvent). Returns how many were new."""
+    before = conn.execute("SELECT COUNT(*) FROM news_events").fetchone()[0]
+    conn.executemany(
+        "INSERT OR REPLACE INTO news_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(e.value_id, e.event_id, format_time(e.time_utc), e.currency, e.importance, e.name,
+          e.actual, e.forecast, e.previous) for e in events],
+    )
+    return conn.execute("SELECT COUNT(*) FROM news_events").fetchone()[0] - before
+
+
+def load_news_events(conn: sqlite3.Connection) -> list:
+    return [
+        news.NewsEvent(r[0], r[1], parse_time(r[2]), r[3], r[4], r[5], r[6], r[7], r[8])
+        for r in conn.execute("SELECT * FROM news_events ORDER BY time_utc, value_id")
+    ]
+
+
+def save_trade_news(conn: sqlite3.Connection, links) -> None:
+    conn.execute("DELETE FROM trade_news")
+    conn.executemany("INSERT OR REPLACE INTO trade_news VALUES (?, ?, ?, ?)",
+                     [(l.position_id, l.value_id, l.minutes_to_event, l.phase) for l in links])
+
+
+def load_trade_news(conn: sqlite3.Connection) -> list:
+    return [news.TradeNews(*r) for r in conn.execute("SELECT * FROM trade_news ORDER BY position_id, value_id")]
 
 
 def save_sequences(conn: sqlite3.Connection, found) -> None:

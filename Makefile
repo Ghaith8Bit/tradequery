@@ -5,7 +5,7 @@ DC = docker compose
 # without it, code changes would be silently ignored by an old image.
 RUN = $(DC) run --rm --build
 
-.PHONY: test demo import show mt5-setup inspect sync shell-mt5 clean-mt5
+.PHONY: test demo import show mt5-setup inspect sync calendar news shell-mt5 clean-mt5
 
 test:        ## unit tests, inside Docker
 	$(RUN) --entrypoint pytest app -q
@@ -27,6 +27,13 @@ inspect:     ## log in with the investor password; print account, symbols, histo
 
 sync:        ## download the account history into ./data
 	$(RUN) mt5 download
+
+calendar:    ## export the MT5 economic calendar: make calendar FROM=2026.08.01 TO=2026.10.31 [SYMBOL=EURUSD]
+	$(RUN) mt5 calendar $(FROM) $(TO) $(SYMBOL)
+
+news:        ## export the calendar and join it to the trades: make news FROM=2026.08.01 TO=2026.10.31
+	$(RUN) mt5 calendar $(FROM) $(TO) $(SYMBOL)
+	$(RUN) app import-calendar
 
 shell-mt5:   ## debug shell in the Wine container
 	$(RUN) mt5 shell

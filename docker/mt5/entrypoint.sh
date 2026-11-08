@@ -3,6 +3,7 @@
 #   setup      one-time: create the Wine prefix, install Windows Python + the MT5 terminal
 #   inspect    log in with the investor password and print a summary (changes nothing)
 #   download   log in and save the account's history to /data/accounts/<login>.db
+#   calendar   export the economic calendar: calendar FROM TO [SYMBOL] (YYYY.MM.DD)
 #   shell      a bash shell in the container (for debugging)
 set -euo pipefail
 
@@ -106,14 +107,14 @@ authorized_count() {
 # and attach Python afterwards. The config file lives in the container's /tmp,
 # is readable only by this user, and is deleted as soon as the terminal is in.
 start_terminal_logged_in() {
-  local dir="$1" win_exe="$2" before i
+  local dir="$1" win_exe="$2" extra="${3:-}" before i
   if [ -z "${MT5_LOGIN:-}" ] || [ -z "${MT5_INVESTOR_PASSWORD:-}" ] || [ -z "${MT5_SERVER:-}" ]; then
     return 0  # the CLI reports what is missing
   fi
   before=$(authorized_count "$dir")
   ( umask 077
-    printf '[Common]\r\nLogin=%s\r\nPassword=%s\r\nServer=%s\r\n' \
-      "$MT5_LOGIN" "$MT5_INVESTOR_PASSWORD" "$MT5_SERVER" | iconv -f UTF-8 -t UTF-16 > /tmp/tq-start.ini )
+    printf '[Common]\r\nLogin=%s\r\nPassword=%s\r\nServer=%s\r\n%s' \
+      "$MT5_LOGIN" "$MT5_INVESTOR_PASSWORD" "$MT5_SERVER" "$extra" | iconv -f UTF-8 -t UTF-16 > /tmp/tq-start.ini )
   wine "$win_exe" '/config:Z:\tmp\tq-start.ini' > /dev/null 2>&1 &
   for i in $(seq 1 36); do
     sleep 5
@@ -145,9 +146,57 @@ run_cli() {
   return "$status"
 }
 
+# Export the economic calendar with mql5/ExportCalendar.mq5: compile it with
+# MetaEditor, start the terminal logged in with the script as its start-up
+# script, and copy the file it writes to /data/news/calendar.csv.
+# Usage: calendar FROM TO [SYMBOL]   (dates as YYYY.MM.DD, server time)
+export_calendar() {
+  start_display
+  local from="${1:?FROM date (YYYY.MM.DD) needed}" to="${2:?TO date needed}" symbol="${3:-}"
+  local name dir files out i
+  name=$(terminal_dir)
+  dir="$PROGRAM_FILES/$name"
+  [ -f "$dir/terminal64.exe" ] || { echo "No MT5 terminal in $dir. Run 'make mt5-setup' first." >&2; exit 1; }
+  ensure_prefix
+  mkdir -p "$dir/MQL5/Scripts/TradeQuery" "$dir/MQL5/Files"
+  cp /src/mql5/ExportCalendar.mq5 "$dir/MQL5/Scripts/TradeQuery/"
+  echo ">> compiling ExportCalendar.mq5"
+  rm -f "$dir/MQL5/Scripts/TradeQuery/ExportCalendar.ex5"
+  # MetaEditor needs to run from the terminal folder with a relative path.
+  ( cd "$dir" && timeout 180 wine MetaEditor64.exe '/compile:MQL5\Scripts\TradeQuery\ExportCalendar.mq5' \
+      '/log:Z:\tmp\tq-compile.log' > /dev/null 2>&1 ) || true
+  [ -f "$dir/MQL5/Scripts/TradeQuery/ExportCalendar.ex5" ] || {
+    echo "Compiling the script failed:" >&2
+    iconv -f UTF-16LE -t UTF-8 /tmp/tq-compile.log 2>/dev/null | tr -d '\r' | grep -v "generating code" | tail -8 >&2
+    exit 1; }
+  files="$dir/MQL5/Files"
+  rm -f "$files/tq_calendar.csv" "$files/tq_calendar.csv.part"
+  printf '%s %s' "$from" "$to" > "$files/tq_calendar_request.txt"
+  local startup='[StartUp]\r\nScript=TradeQuery\\ExportCalendar\r\nShutdownTerminal=1\r\n'
+  [ -n "$symbol" ] && startup="${startup}Symbol=${symbol}\r\nPeriod=H1\r\n"
+  echo ">> starting the terminal with the export script ($from to $to)"
+  start_terminal_logged_in "$dir" "C:\\Program Files\\$name\\terminal64.exe" "$(printf "$startup")"
+  for i in $(seq 1 60); do
+    [ -f "$files/tq_calendar.csv" ] && break
+    sleep 5
+  done
+  rm -f "$files/tq_calendar_request.txt"
+  wineserver -k || true
+  if [ ! -f "$files/tq_calendar.csv" ]; then
+    echo "The export script did not write a file within 5 minutes. Last journal lines:" >&2
+    cat "$dir"/logs/*.log 2>/dev/null | iconv -f UTF-16LE -t UTF-8 2>/dev/null | tr -d '\r' | grep -i "calendar\|script\|error" | tail -8 >&2
+    exit 1
+  fi
+  out=/data/news
+  mkdir -p "$out"
+  cp "$files/tq_calendar.csv" "$out/calendar.csv"
+  echo ">> saved $(($(wc -l < "$out/calendar.csv") - 1)) calendar events to data/news/calendar.csv"
+}
+
 case "${1:-help}" in
   setup) setup ;;
   inspect|download) run_cli "$@" ;;
+  calendar) shift; export_calendar "$@" ;;
   shell) start_display; exec bash ;;
-  *) sed -n '2,7p' "$0" ;;
+  *) sed -n '2,8p' "$0" ;;
 esac

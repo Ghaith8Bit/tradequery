@@ -63,3 +63,20 @@ grid_min_open = 3
 
 # magic numbers to treat as manual trades although they are not 0
 manual_magics = []
+
+[news]
+# Scheduled economic events from the MT5 calendar (make calendar). Overlap, never cause.
+# Only events of at least this importance count: none, low, moderate or high.
+min_importance = "high"
+# A trade overlaps an event when it is open in the window from this many minutes
+# before to this many minutes after the event.
+minutes_before = 15
+minutes_after = 60
+# The calendar clock: "auto" calibrates it on US Nonfarm Payrolls (08:30 New York),
+# "server" uses the trade server clock, or a fixed UTC offset such as "+2".
+calendar_clock = "auto"
+
+# Which currencies move a symbol. By default the symbol's base and profit
+# currencies (XAUUSD: XAU and USD). Add a line to override, for example:
+[news.symbol_currencies]
+# US30 = ["USD"]

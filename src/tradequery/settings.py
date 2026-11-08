@@ -42,6 +42,17 @@ class DetectorSettings:
 
 
 @dataclass(frozen=True)
+class NewsSettings:
+    """How trades are joined to calendar events (see settings.toml [news])."""
+
+    min_importance: str = "high"  # none, low, moderate or high
+    minutes_before: float = 15
+    minutes_after: float = 60
+    calendar_clock: str = "auto"  # auto (calibrate on NFP), server, or a fixed UTC offset like "+2"
+    symbol_currencies: tuple[tuple[str, tuple[str, ...]], ...] = ()  # overrides: (symbol, currencies)
+
+
+@dataclass(frozen=True)
 class Settings:
     clock: ServerClock
     local_timezone: str
@@ -50,6 +61,7 @@ class Settings:
     sessions: dict[str, tuple[int, int]] = field(default_factory=dict)
     breakeven_breaks_streak: bool = False
     detectors: DetectorSettings = field(default_factory=DetectorSettings)
+    news: NewsSettings = field(default_factory=NewsSettings)
 
 
 def load_settings(path: Path | str | None = None) -> Settings:
@@ -66,6 +78,18 @@ def load_settings(path: Path | str | None = None) -> Settings:
         sessions={n: (int(b[0]), int(b[1])) for n, b in raw.get("sessions", {}).items()},
         breakeven_breaks_streak=bool(raw.get("metrics", {}).get("breakeven_breaks_streak", False)),
         detectors=_detector_settings(raw.get("detectors", {})),
+        news=_news_settings(raw.get("news", {})),
+    )
+
+
+def _news_settings(raw: dict) -> NewsSettings:
+    defaults = NewsSettings()
+    return NewsSettings(
+        min_importance=str(raw.get("min_importance", defaults.min_importance)).lower(),
+        minutes_before=float(raw.get("minutes_before", defaults.minutes_before)),
+        minutes_after=float(raw.get("minutes_after", defaults.minutes_after)),
+        calendar_clock=str(raw.get("calendar_clock", defaults.calendar_clock)),
+        symbol_currencies=tuple((s, tuple(c)) for s, c in raw.get("symbol_currencies", {}).items()),
     )
 
 

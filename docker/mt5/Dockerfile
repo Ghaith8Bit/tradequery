@@ -34,6 +34,7 @@ RUN useradd --create-home --uid ${UID} trader \
 
 COPY --chown=trader pyproject.toml README.md /src/
 COPY --chown=trader src /src/src
+COPY --chown=trader mql5 /src/mql5
 COPY docker/mt5/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
