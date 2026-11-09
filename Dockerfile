@@ -7,7 +7,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY tests ./tests
-RUN pip install --no-cache-dir ".[dev,query,llm]"
+RUN pip install --no-cache-dir ".[dev,query,llm,api]"
 
 ENV TQ_DATA_DIR=/data
 USER trader

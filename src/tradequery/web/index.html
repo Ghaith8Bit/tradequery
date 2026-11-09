@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TradeQuery</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #657083; --line: #e2e6ec;
+    --accent: #2457d6; --accent-soft: #e8eefc; --good: #1d7a46; --good-soft: #e5f4ec;
+    --warn: #9a5b00; --warn-soft: #fbf1df; --bad: #b42318; --neg: #c0362c; --code: #f1f3f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1a1f27; --text: #e6e9ef; --muted: #98a2b3; --line: #2b323d;
+      --accent: #7aa2ff; --accent-soft: #1f2a44; --good: #5fd08f; --good-soft: #17301f;
+      --warn: #f0b45c; --warn-soft: #33270f; --bad: #ff8a80; --neg: #ff8a80; --code: #222833;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--line);
+           padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+  header .spacer { flex: 1; }
+  select, input, button { font: inherit; color: inherit; }
+  select { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; max-width: 100%; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--code); color: var(--muted); }
+  .badge.ok { background: var(--good-soft); color: var(--good); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  main { max-width: 1000px; margin: 0 auto; padding: 16px 16px 140px; }
+  .intro { color: var(--muted); margin: 4px 0 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 5px 12px;
+          cursor: pointer; font-size: 13px; text-align: left; }
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
+  details.examples { margin-bottom: 18px; }
+  details.examples summary { cursor: pointer; color: var(--muted); margin-bottom: 8px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 14px 0; }
+  .q { font-weight: 600; margin-bottom: 8px; }
+  .q .tag { font-weight: 400; font-size: 12px; color: var(--muted); margin-left: 6px; }
+  .answer { margin: 6px 0 10px; }
+  .status { display: inline-block; margin-bottom: 6px; }
+  .interp { font-size: 13px; color: var(--muted); border-left: 3px solid var(--accent-soft); padding-left: 8px; margin: 8px 0; }
+  .note { font-size: 13px; color: var(--warn); margin: 4px 0; }
+  .error { color: var(--bad); margin: 6px 0; }
+  .table-wrap { overflow: auto; max-height: 420px; border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--code); text-align: left; font-weight: 600; }
+  td.num { text-align: right; }
+  td.neg { color: var(--neg); }
+  .more { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  details.how { margin-top: 10px; font-size: 13px; }
+  details.how summary { cursor: pointer; color: var(--accent); }
+  pre { background: var(--code); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12px; white-space: pre-wrap;
+        word-break: break-word; }
+  .usage { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  form.ask { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
+             padding: 12px 16px; }
+  form.ask .row { max-width: 1000px; margin: 0 auto; display: flex; gap: 8px; }
+  form.ask input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+                   background: var(--bg); }
+  form.ask button { border: 0; border-radius: 10px; padding: 0 16px; cursor: pointer; }
+  .primary { background: var(--accent); color: #fff; }
+  .secondary { background: var(--code); }
+  button:disabled { opacity: .55; cursor: wait; }
+  form.ask .hint { max-width: 1000px; margin: 6px auto 0; font-size: 12px; color: var(--muted); }
+  @media (max-width: 560px) { form.ask .secondary { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>TradeQuery</h1>
+  <select id="account" aria-label="Account"></select>
+  <span class="spacer"></span>
+  <span id="model" class="badge">checking the model…</span>
+</header>
+
+<main>
+  <p class="intro" id="intro">Ask about your trade history in plain English. Every number in an answer is checked against
+    the result table, and the interpretation line shows exactly what was looked at.</p>
+  <details class="examples" open>
+    <summary>Example questions (instant, no model call)</summary>
+    <div class="chips" id="presets"></div>
+  </details>
+  <div id="feed"></div>
+</main>
+
+<form class="ask" id="form" autocomplete="off">
+  <div class="row">
+    <input id="question" maxlength="500" placeholder="e.g. Which hour of the day loses me the most money on gold?" required>
+    <button class="primary" id="send" type="submit">Ask</button>
+    <button class="secondary" id="reset" type="button" title="Start a new conversation">New</button>
+  </div>
+  <div class="hint" id="hint">Follow-ups refine your last question, e.g. “only in October”.</div>
+</form>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { login: null, sessionId: null, busy: false };
+
+function el(tag, attrs = {}, text) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (text !== undefined && text !== null) node.textContent = text;  // always text, never HTML
+  return node;
+}
+
+async function api(path, body) {
+  const options = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || data);
+    throw new Error(detail || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+const money = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function cellText(column, value, shares) {
+  if (value === null || value === undefined) return "–";
+  if (typeof value === "number") {
+    if (shares.includes(column)) return (value * 100).toFixed(2) + "%";
+    if (Number.isInteger(value)) return String(value);
+    return Math.abs(value) < 1 ? value.toFixed(4) : money.format(value);
+  }
+  return String(value);
+}
+
+function renderTable(result) {
+  const wrap = el("div", { class: "table-wrap" });
+  const table = el("table");
+  const head = el("tr");
+  result.columns.forEach((c) => head.appendChild(el("th", {}, c.replaceAll("_", " "))));
+  table.appendChild(el("thead")).appendChild(head);
+  const body = el("tbody");
+  result.rows.forEach((row) => {
+    const tr = el("tr");
+    row.forEach((v, i) => {
+      const numeric = typeof v === "number";
+      const td = el("td", { class: (numeric ? "num" : "") + (numeric && v < 0 ? " neg" : "") },
+                    cellText(result.columns[i], v, result.share_columns));
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function renderAnswer(card, data) {
+  const r = data.result;
+  if (data.text) {
+    if (r) card.appendChild(el("span", { class: "badge ok status" }, "✓ every number checked against the table"));
+    card.appendChild(el("div", { class: "answer" }, data.text));
+  } else if (r && data.unsupported_numbers && data.unsupported_numbers.length) {
+    card.appendChild(el("span", { class: "badge warn status" },
+      "The written answer used numbers not in the table, so only the table is shown"));
+  }
+  if (data.error) card.appendChild(el("div", { class: "error" }, data.error));
+  if (r) {
+    card.appendChild(el("div", { class: "interp" }, "Interpretation: " + r.interpretation));
+    r.notes.forEach((n) => card.appendChild(el("div", { class: "note" }, "Note: " + n)));
+    if (r.rows.length) card.appendChild(renderTable(r));
+    else card.appendChild(el("div", { class: "more" }, "No rows matched."));
+    if (r.truncated) card.appendChild(el("div", { class: "more" }, "More rows exist than are shown."));
+  }
+  if (data.spec) {
+    const how = el("details", { class: "how" });
+    how.appendChild(el("summary", {}, "How this was found (spec and SQL)"));
+    how.appendChild(el("pre", {}, JSON.stringify(data.spec, null, 2)));
+    if (r && r.sql) how.appendChild(el("pre", {}, r.sql));
+    card.appendChild(how);
+  }
+  const usage = data.model
+    ? `${data.model} · ${data.usage.requests} requests · ${data.usage.input_tokens} in / ${data.usage.output_tokens} out tokens`
+    : "Preset: answered from a hand-written spec, no model call";
+  card.appendChild(el("div", { class: "usage" }, usage));
+}
+
+async function run(question, request, label) {
+  if (state.busy || !state.login) return;
+  state.busy = true;
+  $("send").disabled = true;
+  const card = el("div", { class: "card" });
+  const q = el("div", { class: "q" }, question);
+  if (label) q.appendChild(el("span", { class: "tag" }, label));
+  card.appendChild(q);
+  const waiting = el("div", { class: "more" }, "Working…");
+  card.appendChild(waiting);
+  $("feed").prepend(card);
+  document.querySelector("details.examples").open = false;  // keep the answers in view
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    const data = await request();
+    waiting.remove();
+    if (data.session_id) state.sessionId = data.session_id;
+    renderAnswer(card, data);
+  } catch (error) {
+    waiting.remove();
+    card.appendChild(el("div", { class: "error" }, error.message));
+  } finally {
+    state.busy = false;
+    $("send").disabled = false;
+  }
+}
+
+$("form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const question = $("question").value.trim();
+  if (!question) return;
+  $("question").value = "";
+  const followUp = state.sessionId ? "follow-up" : "";
+  run(question, () => api("/api/ask", { login: state.login, question, session_id: state.sessionId }), followUp);
+});
+
+$("reset").addEventListener("click", () => {
+  state.sessionId = null;
+  $("feed").prepend(el("div", { class: "more" }, "— new conversation —"));
+  $("question").focus();
+});
+
+$("account").addEventListener("change", () => {
+  state.login = Number($("account").value);
+  state.sessionId = null;
+});
+
+async function start() {
+  try {
+    const accounts = await api("/api/accounts");
+    if (!accounts.length) {
+      $("intro").textContent = "No account stored yet. Run make sync, or import an MT5 report, then reload.";
+      return;
+    }
+    accounts.forEach((a) => {
+      const span = a.first ? ` · ${a.first.slice(0, 10)} to ${a.last.slice(0, 10)}` : "";
+      $("account").appendChild(el("option", { value: a.login }, `${a.login} · ${a.currency || ""} · ${a.trades} trades${span}`));
+    });
+    state.login = accounts[0].login;
+    const presets = await api("/api/presets");
+    presets.forEach((p) => {
+      const chip = el("button", { class: "chip", type: "button" }, p.question);
+      chip.addEventListener("click", () => run(p.question, () => api("/api/preset", { login: state.login, number: p.number }), "preset"));
+      $("presets").appendChild(chip);
+    });
+  } catch (error) {
+    $("intro").textContent = "Could not load accounts: " + error.message;
+  }
+  try {
+    const status = await api("/api/status");
+    $("model").textContent = status.ready ? status.model : "no language model: presets only";
+    $("model").className = "badge " + (status.ready ? "ok" : "warn");
+    if (!status.ready) $("hint").textContent = status.message || "Add GEMINI_API_KEY to .env to ask your own questions.";
+  } catch (error) {
+    $("model").textContent = "model status unknown";
+  }
+  $("question").focus();
+}
+start();
+</script>
+</body>
+</html>

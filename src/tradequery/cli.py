@@ -729,6 +729,13 @@ def cmd_llm_models(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    from .api import serve
+
+    serve(host=args.host, port=args.port)
+    return 0
+
+
 def cmd_compare(args) -> int:
     report = parse_report(args.report, load_settings().clock)
     conn = db.connect(db.db_path(report.login, args.data_dir), read_only=True)
@@ -880,6 +887,10 @@ def main(argv=None) -> int:
     ak.add_argument("--spec", action="store_true", help="also print the QuerySpec the model wrote")
     ak.add_argument("--sql", action="store_true", help="also print the SQL that ran")
     ak.set_defaults(func=cmd_ask)
+    sv = sub.add_parser("serve", help="run the web page and API")
+    sv.add_argument("--host", default="0.0.0.0", help="address to listen on (inside Docker: all)")
+    sv.add_argument("--port", type=int, default=8000)
+    sv.set_defaults(func=cmd_serve)
     lm = sub.add_parser("llm-models", help="list the Gemini models your API key can use")
     lm.set_defaults(func=cmd_llm_models)
     comp = sub.add_parser("compare", help="check an MT5 HTML report against the stored (synced) history")

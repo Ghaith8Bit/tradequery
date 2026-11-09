@@ -88,6 +88,14 @@ docker compose run --rm app news          # results inside vs outside news windo
 - A trade overlaps an event when it is open from 15 minutes before to 60 minutes after a high-importance event for its symbol's currencies (settings.toml `[news]`).
 - Results are worded as "overlapped with", never "caused by". Calendars list scheduled events only; surprise headlines are not covered.
 
+## The web page
+
+```bash
+make web          # http://localhost:8000 (reachable from this computer only); make web-stop to stop it
+```
+
+One page: pick the account, type a question (follow-ups refine the last one, **New** starts over), or click one of the example questions, which run from hand-written specs with no model call. Each answer shows whether every number was checked, the interpretation line, any notes, the result table, and a "How this was found" panel with the spec and SQL. The API behind it (FastAPI, `/api/docs`) opens one account database per request, read-only, and rate limits model calls.
+
 ## Asking in plain English
 
 ```bash
@@ -172,6 +180,8 @@ src/tradequery/
   llm.py          provider wrapper (Gemini; a scripted fake for tests)
   ask.py          question -> spec -> result -> checked answer, with follow-ups
   verify.py       number checker for the written answer
+  api.py          the web API (FastAPI): accounts, ask with follow-up sessions, presets, specs
+  web/index.html  the page: one file, no external libraries
 mql5/             ExportCalendar.mq5: exports the MT5 economic calendar
   cli.py          demo | inspect | download | import | compare | metrics | show
 docker/mt5/       Wine image and its setup script

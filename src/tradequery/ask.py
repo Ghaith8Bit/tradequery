@@ -111,6 +111,7 @@ class Session:
 
     question: str | None = None
     spec: dict | None = None
+    login: int | None = None  # the account the conversation is about (the web API never crosses accounts)
 
 
 @dataclass

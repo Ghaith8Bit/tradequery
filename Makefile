@@ -5,7 +5,7 @@ DC = docker compose
 # without it, code changes would be silently ignored by an old image.
 RUN = $(DC) run --rm --build
 
-.PHONY: test demo import show mt5-setup inspect sync calendar news ask shell-mt5 clean-mt5
+.PHONY: test demo import show mt5-setup inspect sync calendar news ask web web-stop shell-mt5 clean-mt5
 
 test:        ## unit tests, inside Docker
 	$(RUN) --entrypoint pytest app -q
@@ -37,6 +37,13 @@ news:        ## export the calendar and join it to the trades: make news FROM=20
 
 ask:         ## ask in plain English: make ask Q="which hour loses the most on gold?" (no Q: interactive)
 	$(RUN) app ask $(if $(Q),"$(Q)",)
+
+web:         ## start the web page in the background: http://localhost:8000 (stop: make web-stop)
+	$(DC) up -d --build web
+	@echo "TradeQuery is running at http://localhost:8000"
+
+web-stop:    ## stop the web page
+	$(DC) stop web
 
 shell-mt5:   ## debug shell in the Wine container
 	$(RUN) mt5 shell

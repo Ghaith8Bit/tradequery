@@ -12,6 +12,22 @@ services:
     volumes:
       - ./data:/data
 
+  # The web page and API (make web): http://localhost:8000, reachable from this computer only.
+  web:
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+    command: ["serve"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
   # MetaTrader 5 + Windows Python under Wine. Only used to download history.
   mt5:
     build:
