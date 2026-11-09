@@ -1,6 +1,7 @@
 """Command line.
 
   tradequery demo        print a synthetic account (no MT5, no credentials)
+  tradequery sample      store the synthetic sample account, to try the page and questions
   tradequery inspect     log in to MT5; show account, symbols, history summary
   tradequery download    save account, deals and symbol specs to data/accounts/<login>.db
   tradequery import FILE load an MT5 HTML history report into data/accounts/<login>.db
@@ -769,6 +770,16 @@ def cmd_eval(args) -> int:
     return 0
 
 
+def cmd_sample(args) -> int:
+    from .evaluate import EVAL_LOGIN, build_eval_account
+
+    path = build_eval_account(args.data_dir or data_dir(), load_settings())
+    print(f"Stored the synthetic sample account {EVAL_LOGIN} at {path}: 48 made-up trades on three symbols,")
+    print("with a planted martingale, losing and winning streaks, deposits, a withdrawal and four calendar events.")
+    print("Try it: make web (then pick the account in the page), or make ask Q=\"What is my win rate?\"")
+    return 0
+
+
 def cmd_serve(args) -> int:
     from .api import serve
 
@@ -937,6 +948,8 @@ def main(argv=None) -> int:
     ev.add_argument("--no-explain", dest="explain", action="store_false",
                     help="skip the written answer (one request per question; no number-check score)")
     ev.set_defaults(func=cmd_eval)
+    sm = sub.add_parser("sample", help="store the synthetic sample account (no MT5 needed)")
+    sm.set_defaults(func=cmd_sample)
     sv = sub.add_parser("serve", help="run the web page and API")
     sv.add_argument("--host", default="0.0.0.0", help="address to listen on (inside Docker: all)")
     sv.add_argument("--port", type=int, default=8000)

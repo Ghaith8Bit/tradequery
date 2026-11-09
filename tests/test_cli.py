@@ -237,3 +237,10 @@ def test_ask_command_with_a_fake_model(tmp_path, monkeypatch, capsys):
     assert cli.main(["--data-dir", str(tmp_path), "ask", "--spec", "longest", "losing", "streak?"]) == 0
     out = capsys.readouterr().out
     assert "Your longest losing streak was 6 trades." in out and "Spec: {" in out and "2 requests" in out
+
+
+def test_sample_command_stores_a_queryable_account(tmp_path, capsys):
+    assert cli.main(["--data-dir", str(tmp_path), "sample"]) == 0
+    assert "900001" in capsys.readouterr().out
+    assert cli.main(["--data-dir", str(tmp_path), "query", "--examples", "11"]) == 0
+    assert "loss" in capsys.readouterr().out  # the planted 6-trade losing streak

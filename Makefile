@@ -1,17 +1,22 @@
 # Run from WSL, in a clone that lives in the WSL filesystem (~/tradequery), not /mnt/c.
 export UID := $(shell id -u)
+# Create the data folder as you, before Docker would create it as root (and then nothing could write to it).
+$(shell mkdir -p data)
 DC = docker compose
 # --build rebuilds the image first (cached, so about a second when nothing changed);
 # without it, code changes would be silently ignored by an old image.
 RUN = $(DC) run --rm --build
 
-.PHONY: test demo import show mt5-setup inspect sync calendar news ask eval web web-stop shell-mt5 clean-mt5
+.PHONY: test demo sample import show mt5-setup inspect sync calendar news ask eval web web-stop shell-mt5 clean-mt5
 
 test:        ## unit tests, inside Docker
 	$(RUN) --entrypoint pytest app -q
 
 demo:        ## print a synthetic account (no MT5 needed)
 	$(RUN) app demo
+
+sample:      ## store the synthetic sample account (no MT5 needed), to try the page and questions
+	$(RUN) app sample
 
 import:      ## load an MT5 HTML report saved in data/: make import FILE=data/ReportHistory-<login>.html
 	$(RUN) app import /data/$(notdir $(FILE))
