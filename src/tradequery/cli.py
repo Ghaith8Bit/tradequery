@@ -729,6 +729,46 @@ def cmd_llm_models(args) -> int:
     return 0
 
 
+def cmd_eval(args) -> int:
+    import os
+    import tempfile
+
+    from . import evaluate
+    from .llm import LLMError, provider_from_env
+
+    if args.model:
+        os.environ["GEMINI_MODEL"] = args.model
+    settings = load_settings()
+    questions = evaluate.load_questions(args.questions)
+    if args.ids:
+        wanted = set(args.ids.split(","))
+        questions = [q for q in questions if q["id"] in wanted]
+    if args.limit:
+        questions = questions[: args.limit]
+    try:
+        provider = provider_from_env()
+    except LLMError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
+    root = Path(tempfile.mkdtemp(prefix="tq-eval-"))
+    path = evaluate.build_eval_account(root, settings)
+    per_q = 2 if args.explain else 1
+    print(f"Eval: {len(questions)} questions on the synthetic eval account with {provider.name} {provider.model}; "
+          f"about {len(questions) * per_q} requests, paced at {args.rpm:g} per minute.")
+
+    def progress(i, total, o):
+        mark = "PASS" if o.passed else "fail"
+        extra = f" ({o.error})" if o.error and not o.passed else ""
+        print(f"  [{i:>2}/{total}] {mark} {o.id:<10} {o.kind or '-':<11} {o.seconds:>5.1f}s{extra}", flush=True)
+
+    report = evaluate.run_suite(questions, path, settings, provider, explain=args.explain, rpm=args.rpm,
+                                progress=progress)
+    json_path, md_path = evaluate.save(report, args.out)
+    print("\n" + evaluate.markdown(report))
+    print(f"Saved {json_path} and {md_path}")
+    return 0
+
+
 def cmd_serve(args) -> int:
     from .api import serve
 
@@ -887,6 +927,16 @@ def main(argv=None) -> int:
     ak.add_argument("--spec", action="store_true", help="also print the QuerySpec the model wrote")
     ak.add_argument("--sql", action="store_true", help="also print the SQL that ran")
     ak.set_defaults(func=cmd_ask)
+    ev = sub.add_parser("eval", help="run the eval questions against the language model and score them")
+    ev.add_argument("--questions", default="evals/questions.jsonl", help="the questions file")
+    ev.add_argument("--out", default="evals/results", help="where to save the report")
+    ev.add_argument("--ids", help="only these question ids, comma separated")
+    ev.add_argument("--limit", type=int, help="only the first N questions")
+    ev.add_argument("--model", help="a model name to use instead of GEMINI_MODEL")
+    ev.add_argument("--rpm", type=float, default=9, help="model requests per minute (free tiers are strict)")
+    ev.add_argument("--no-explain", dest="explain", action="store_false",
+                    help="skip the written answer (one request per question; no number-check score)")
+    ev.set_defaults(func=cmd_eval)
     sv = sub.add_parser("serve", help="run the web page and API")
     sv.add_argument("--host", default="0.0.0.0", help="address to listen on (inside Docker: all)")
     sv.add_argument("--port", type=int, default=8000)
