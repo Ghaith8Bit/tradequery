@@ -11,6 +11,8 @@
   tradequery import-calendar [FILE]   load the economic calendar export and join it to trades
   tradequery news        trades and drawdowns that overlapped scheduled news
   tradequery query SPEC  run a QuerySpec (JSON) on a stored account (--examples all: the plan's questions)
+  tradequery ask [QUESTION]   ask in plain English (Gemini); no question: interactive with follow-ups
+  tradequery llm-models  list the Gemini models your API key can use
   tradequery show        analyse a downloaded account (no MT5 needed)
 
 inspect and download need Windows Python + the MT5 terminal: run them with
@@ -651,6 +653,82 @@ def cmd_query(args) -> int:
     return 0
 
 
+def _print_answer(answer, provider, show_spec: bool, show_sql: bool) -> None:
+    import json as _json
+
+    if answer.spec is not None and show_spec:
+        print("Spec: " + _json.dumps(answer.spec.model_dump(mode="json", exclude_defaults=True)))
+    if answer.text and answer.result is None:
+        print(answer.text)  # clarify or unsupported
+    if answer.result is not None:
+        if answer.verified and answer.text:
+            print(answer.text + "\n")
+        _print_result(answer.result, show_sql)
+        if not answer.verified and not answer.error:
+            print("  (The written explanation used numbers that are not in the table, so only the table is shown.)")
+    if answer.error:
+        print(answer.error)
+    print(f"[{provider.name} {provider.model}: {answer.usage.requests} requests, "
+          f"{answer.usage.input_tokens} in / {answer.usage.output_tokens} out tokens]")
+
+
+def cmd_ask(args) -> int:
+    from .ask import Session, ask
+    from .llm import LLMError, provider_from_env
+
+    settings = load_settings()
+    path = db.db_path(_pick_login(args), args.data_dir)
+    try:
+        provider = provider_from_env()
+    except LLMError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
+    session = Session()
+    if args.question:
+        answer = ask(" ".join(args.question), path, settings, provider, session)
+        _print_answer(answer, provider, args.spec, args.sql)
+        return 0 if not answer.error else 1
+    print(f"Ask about account {path.stem} ({provider.name} {provider.model}). Follow-ups refine the last "
+          "question; 'new' starts over; an empty line quits.")
+    while True:
+        try:
+            question = input("\n> ").strip()
+        except EOFError:
+            break
+        if not question:
+            break
+        if question.lower() == "new":
+            session = Session()
+            print("Starting over.")
+            continue
+        _print_answer(ask(question, path, settings, provider, session), provider, args.spec, args.sql)
+    return 0
+
+
+def cmd_llm_models(args) -> int:
+    from .llm import GeminiProvider, LLMError, choose_model
+    import os
+
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        print("Error: no GEMINI_API_KEY in .env", file=sys.stderr)
+        return 2
+    try:
+        provider = GeminiProvider(key, model="unused")
+        names = provider.list_models()
+    except LLMError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 2
+    print("Models this key can use for text:")
+    for name in names:
+        print("  " + name.removeprefix("models/"))
+    print(f"\nChosen when GEMINI_MODEL is not set: {choose_model(names) or 'none'}")
+    configured = os.environ.get("GEMINI_MODEL", "").strip()
+    if configured:
+        print(f"Set in .env: GEMINI_MODEL={configured}")
+    return 0
+
+
 def cmd_compare(args) -> int:
     report = parse_report(args.report, load_settings().clock)
     conn = db.connect(db.db_path(report.login, args.data_dir), read_only=True)
@@ -796,6 +874,14 @@ def main(argv=None) -> int:
     qu.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
     qu.add_argument("--sql", action="store_true", help="also print the SQL that ran")
     qu.set_defaults(func=cmd_query)
+    ak = sub.add_parser("ask", help="ask a question in plain English (no question: an interactive session)")
+    ak.add_argument("question", nargs="*", help="the question; leave out for an interactive session with follow-ups")
+    ak.add_argument("--login", type=int, help="account number (default: the only downloaded account)")
+    ak.add_argument("--spec", action="store_true", help="also print the QuerySpec the model wrote")
+    ak.add_argument("--sql", action="store_true", help="also print the SQL that ran")
+    ak.set_defaults(func=cmd_ask)
+    lm = sub.add_parser("llm-models", help="list the Gemini models your API key can use")
+    lm.set_defaults(func=cmd_llm_models)
     comp = sub.add_parser("compare", help="check an MT5 HTML report against the stored (synced) history")
     comp.add_argument("report", help="path to the ReportHistory-<login>.html file")
     comp.add_argument("--show", type=int, default=20, help="how many differences to print")

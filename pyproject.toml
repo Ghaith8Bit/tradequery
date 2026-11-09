@@ -23,6 +23,8 @@ dependencies = [
 dev = ["pytest>=8"]
 # The question layer (QuerySpec validation and the SQL compiler). Not needed by the MT5 sync.
 query = ["pydantic>=2.7", "SQLAlchemy>=2.0"]
+# The language model provider (Gemini, Google's official SDK). Imported only when asking questions.
+llm = ["google-genai>=1.0"]
 
 [project.scripts]
 tradequery = "tradequery.cli:main"

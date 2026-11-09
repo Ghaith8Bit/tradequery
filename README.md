@@ -88,6 +88,21 @@ docker compose run --rm app news          # results inside vs outside news windo
 - A trade overlaps an event when it is open from 15 minutes before to 60 minutes after a high-importance event for its symbol's currencies (settings.toml `[news]`).
 - Results are worded as "overlapped with", never "caused by". Calendars list scheduled events only; surprise headlines are not covered.
 
+## Asking in plain English
+
+```bash
+make ask Q="Which hour of the day loses me the most money on gold?"
+make ask        # interactive: follow-ups like "only September" refine the last question
+docker compose run --rm app llm-models   # the Gemini models your key can use
+```
+
+Needs `GEMINI_API_KEY` in `.env` (Google AI Studio, free tier available). Two model calls per question:
+
+1. **Question -> QuerySpec.** The model gets the schema, the plan's example questions, the account's date range, symbols and magic numbers, and the previous spec for follow-ups. An invalid spec goes back once with the validation error.
+2. **Result -> a short answer.** The model sees only the question, the interpretation line and the result table. `verify.py` checks every number in the answer against the table (allowing rounding, percentages and signs); one retry on a mismatch, then the table is shown without prose.
+
+Every answer prints the request and token count, so free-tier usage is visible. Trade comments and credentials never reach the model.
+
 ## Asking questions (QuerySpec)
 
 The language model will never write SQL. It fills in a **QuerySpec**: a typed question (entity, filters, time range, group-by, aggregations, named metrics, comparisons, order, limit) that is checked against a whitelist and compiled to parameterized SQL. For now you can write specs yourself:
@@ -154,6 +169,9 @@ src/tradequery/
   compiler.py     spec -> parameterized SQL (SQLAlchemy Core)
   execute.py      runs a spec read-only; named metrics via metrics.py; interpretation line
   examples.py     the plan's example questions as specs (tests, and worked examples for the LLM)
+  llm.py          provider wrapper (Gemini; a scripted fake for tests)
+  ask.py          question -> spec -> result -> checked answer, with follow-ups
+  verify.py       number checker for the written answer
 mql5/             ExportCalendar.mq5: exports the MT5 economic calendar
   cli.py          demo | inspect | download | import | compare | metrics | show
 docker/mt5/       Wine image and its setup script

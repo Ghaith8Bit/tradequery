@@ -5,6 +5,10 @@ services:
       context: .
       args:
         UID: ${UID:-1000}
+    # Only the language model settings come in from .env (the MT5 password does not).
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-}
     volumes:
       - ./data:/data
 
