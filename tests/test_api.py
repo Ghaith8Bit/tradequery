@@ -1,7 +1,7 @@
 """The web API, with a scripted fake model: no network, no quota."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -125,3 +125,116 @@ def test_model_calls_are_rate_limited(root):
     for _ in range(MODEL_CALLS_PER_MINUTE):
         assert c.post("/api/ask", json={"login": 1001, "question": "streak"}).status_code == 200
     assert c.post("/api/ask", json={"login": 1001, "question": "streak"}).status_code == 429
+
+
+# ---- upload a report, Sync now, price charts ----
+
+def fresh_client(tmp_path):
+    app = create_app(data_root=tmp_path, settings=SETTINGS, provider_factory=lambda: FakeProvider([]))
+    return TestClient(app)
+
+
+def test_uploading_a_report_adds_the_account(tmp_path):
+    from test_mt5_report import report_html
+
+    c = fresh_client(tmp_path)
+    assert c.get("/api/accounts").json() == []
+    body = report_html().encode("utf-16")  # as the terminal writes it
+    first = c.post("/api/import", content=body, headers={"Content-Type": "application/octet-stream"}).json()
+    assert first["login"] == 11112222 and first["new_deals"] == first["deals"] > 0 and first["trades"] > 0
+    again = c.post("/api/import", content=body).json()
+    assert again["new_deals"] == 0  # nothing is stored twice
+    accounts = c.get("/api/accounts").json()
+    assert [a["login"] for a in accounts] == [11112222] and accounts[0]["synced_at"]
+
+
+def test_a_bad_upload_is_refused_cleanly(tmp_path):
+    c = fresh_client(tmp_path)
+    bad = c.post("/api/import", content=b"<html><body>not a report</body></html>")
+    assert bad.status_code == 400 and "MT5 history report" in bad.json()["detail"]
+    assert c.post("/api/import", content=b"").status_code == 400
+    assert c.get("/api/accounts").json() == []
+
+
+def test_sync_now_needs_a_live_worker_and_runs_one_at_a_time(tmp_path):
+    import time as _time
+
+    c = fresh_client(tmp_path)
+    status = c.get("/api/sync").json()
+    assert status["available"] is False and "not running" in status["reason"]
+    assert c.post("/api/sync").status_code == 503
+    folder = tmp_path / "sync"
+    folder.mkdir()
+    beat = f"beat={int(_time.time())}\n"
+    (folder / "worker").write_text("login=1001\nready=no\nreason=MT5 is not set up yet.\n" + beat)
+    status = c.get("/api/sync").json()
+    assert status["available"] is False and status["reason"] == "MT5 is not set up yet."
+    (folder / "worker").write_text("login=1001\nready=yes\nevery=0\n" + beat)
+    asked = c.post("/api/sync")
+    assert asked.status_code == 200 and asked.json()["requested"] and (folder / "request").is_file()
+    assert c.post("/api/sync").status_code == 409  # already asked
+    # the worker picks it up, then fails: the page gets the last line of its log
+    (folder / "request").unlink()
+    (folder / "job").write_text(f"state=failed\nstarted={int(_time.time()) - 60}\nfinished={int(_time.time())}\n")
+    (folder / "job.log").write_text(">> starting\nThe terminal did not log in within 3 minutes.\n")
+    status = c.get("/api/sync").json()
+    assert status["state"] == "failed" and status["message"] == "The terminal did not log in within 3 minutes."
+    # a stale heartbeat means the worker is gone
+    (folder / "worker").write_text("login=1001\nready=yes\nbeat=1000\n")
+    assert c.get("/api/sync").json()["available"] is False
+
+
+def test_a_trade_and_a_sequence_on_a_price_chart(root, tmp_path):
+    from tradequery.models import Bar
+
+    c, _ = client(root)
+    path = db.db_path(1002, root)
+    conn = db.connect(path)
+    try:
+        seq_id, depth = conn.execute("SELECT sequence_id, depth FROM sequences ORDER BY depth DESC LIMIT 1").fetchone()
+        pid = conn.execute("SELECT position_id FROM sequence_trades WHERE sequence_id = ? ORDER BY level",
+                           (seq_id,)).fetchone()[0]
+        t = conn.execute("SELECT symbol, open_time_utc, close_time_utc, open_price FROM trades WHERE position_id = ?",
+                         (pid,)).fetchone()
+        start, end = db.parse_time(t[1]), db.parse_time(t[2])
+        minutes = int((end - start).total_seconds() // 60) + 1
+        p = t[3]
+        with conn:
+            db.save_bars(conn, [Bar(t[0], start + timedelta(minutes=i), p, p + 1, p - 1, p + 0.5, 10)
+                                for i in range(minutes)])
+    finally:
+        conn.close()
+
+    trade = c.get("/api/trade", params={"login": 1002, "position_id": pid}).json()
+    assert trade["kind"] == "trade" and trade["trade"]["position_id"] == pid and trade["sequence_id"] == seq_id
+    assert trade["candles"] and trade["note"] is None
+    assert [m["kind"] for m in trade["markers"]] == ["entry", "exit"]
+    assert len(trade["candles"]) <= 240 and all(len(k) == 5 for k in trade["candles"])
+    # the account without bars: no candles, a note, the fills still listed
+    bare = c.get("/api/trade", params={"login": 1001, "position_id": pid}).json()
+    assert bare["candles"] == [] and "No price bars" in bare["note"] and len(bare["markers"]) == 2
+
+    seq = c.get("/api/sequence", params={"login": 1002, "sequence_id": seq_id}).json()
+    assert seq["sequence"]["depth"] == depth == len(seq["trades"]) and len(seq["markers"]) == 2 * depth
+    assert [m["level"] for m in seq["markers"] if m["kind"] == "entry"] == list(range(1, depth + 1))
+
+    assert c.get("/api/trade", params={"login": 1002, "position_id": 999999999}).status_code == 404
+    assert c.get("/api/sequence", params={"login": 1002, "sequence_id": 999999}).status_code == 404
+    overview = c.get("/api/overview", params={"login": 1002}).json()
+    assert overview["stats"]["deepest_sequence"]["id"] == seq_id
+
+
+def test_long_spans_are_merged_into_wider_candles(tmp_path):
+    from tradequery.models import Bar
+    from tradequery.pricechart import MAX_CANDLES, _candles
+
+    conn = db.connect(tmp_path / "x.db")
+    t0 = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    with conn:
+        db.save_bars(conn, [Bar("XAUUSD", t0 + timedelta(minutes=i), 100 + i, 101 + i, 99 + i, 100.5 + i, 5)
+                            for i in range(1000)])
+    candles, size = _candles(conn, "XAUUSD", t0, t0 + timedelta(minutes=999))
+    conn.close()
+    assert size == 5 and len(candles) == 200 <= MAX_CANDLES
+    first = candles[0]
+    assert first[1] == 100 and first[2] == 105 and first[3] == 99 and first[4] == 104.5  # open, high, low, close

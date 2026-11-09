@@ -112,7 +112,15 @@ docker compose run --rm app news          # results inside vs outside news windo
 make web          # http://localhost:8000 (reachable from this computer only); make web-stop to stop it
 ```
 
-One page: pick the account, type a question (follow-ups refine the last one, **New** starts over), or click one of the example questions, which run from hand-written specs with no model call. Each answer shows whether every number was checked, the interpretation line, any notes, the result table, and a "How this was found" panel with the spec and SQL. The API behind it (FastAPI, `/api/docs`) opens one account database per request, read-only, and rate limits model calls.
+A chat page that also works on a phone:
+
+- **Start screen:** the account overview (net result, win rate, balance, worst drawdown, deepest sequence), a balance chart, net result by weekday, plain risk facts, and suggested questions. Suggested questions run from hand-written specs with no model call.
+- **Answers:** typed questions are answered in chat bubbles, with a badge saying whether every number was checked. Answers get an automatic chart when their shape suits one, plus a "How this was found" panel with the spec and SQL. Chats are saved in the browser, per account.
+- **Upload report:** drop an MT5 history report (.html) anywhere on the page to add or extend an account. This works the same as `make import`: stored deals are never overwritten.
+- **Sync now:** downloads new trades from MT5 without the terminal. `make web` also starts a small **sync worker** in the Wine image when MT5 is set up. The page asks it to sync through files in `data/sync/`; your credentials stay in `.env` and never pass through the page. To also sync on a timer, set `SYNC_EVERY_MINUTES` in `.env`. The sidebar shows when the account was last updated.
+- **Trade charts:** click any position or sequence number in an answer (or the deepest-sequence tile) to see it on a candle chart. The chart is built from the stored one-minute bars and marks every entry, exit, stop loss and take profit. Hours without prices, such as weekends, are skipped and marked.
+
+The API behind it (FastAPI, `/api/docs`) opens one account database per request (read-only, except for uploads) and rate limits model calls.
 
 ## Asking in plain English
 

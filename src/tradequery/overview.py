@@ -32,7 +32,8 @@ def build_overview(path: Path, settings: Settings) -> dict:
         flows = db.load_cash_flows(conn)
         specs = {s["symbol"]: s for s in db.load_symbols(conn)}
         deepest = conn.execute(
-            "SELECT depth, max_lot_multiplier, net_pnl, start_utc FROM sequences ORDER BY depth DESC, net_pnl ASC LIMIT 1"
+            "SELECT depth, max_lot_multiplier, net_pnl, start_utc, sequence_id FROM sequences "
+            "ORDER BY depth DESC, net_pnl ASC LIMIT 1"
         ).fetchone()
         deep_count = conn.execute("SELECT COUNT(*), SUM(is_win) FROM sequences WHERE depth >= 6").fetchone()
         no_stop = conn.execute("SELECT COUNT(*) FROM tags WHERE rule = 'no_stop_loss'").fetchone()[0]
@@ -55,7 +56,8 @@ def build_overview(path: Path, settings: Settings) -> dict:
         "net_profit": m["net_profit"], "win_rate": m["win_rate"], "profit_factor": m["profit_factor"],
         "max_drawdown": m["max_drawdown"], "max_drawdown_pct": m["max_drawdown_pct"],
         "deposits": m["total_deposits"], "withdrawals": m["total_withdrawals"],
-        "deepest_sequence": ({"depth": deepest[0], "multiplier": deepest[1], "net": deepest[2], "start": deepest[3]}
+        "deepest_sequence": ({"depth": deepest[0], "multiplier": deepest[1], "net": deepest[2], "start": deepest[3],
+                                  "id": deepest[4]}
                              if deepest else None),
     }
     curve = [(db.format_time(t.close_time_utc), t.balance_after) for t in trades if t.balance_after is not None]

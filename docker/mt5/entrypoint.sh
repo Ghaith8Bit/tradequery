@@ -4,6 +4,7 @@
 #   inspect    log in with the investor password and print a summary (changes nothing)
 #   download   log in and save the account's history to /data/accounts/<login>.db
 #   calendar   export the economic calendar: calendar FROM TO [SYMBOL] (YYYY.MM.DD)
+#   worker     stay running; sync when the web page asks (and every SYNC_EVERY_MINUTES, if set)
 #   shell      a bash shell in the container (for debugging)
 set -euo pipefail
 
@@ -33,6 +34,13 @@ start_display() {
 }
 
 wine_python() { wine "$PY_EXE" "$@"; }
+
+# One MT5 job at a time across containers (make sync, make calendar and the
+# sync worker share the Wine volume, and so this lock file).
+take_lock() {
+  exec 9>"$WINEPREFIX/.tradequery.lock"
+  flock -w 900 9 || { echo "Another MT5 job is still running; try again later." >&2; exit 1; }
+}
 
 # Without these overrides wineboot opens an "install Wine Mono / Gecko?" dialog,
 # which nobody can click in a headless container, and hangs forever.
@@ -131,6 +139,7 @@ start_terminal_logged_in() {
 }
 
 run_cli() {
+  take_lock
   start_display
   local name dir
   name=$(terminal_dir)
@@ -151,6 +160,7 @@ run_cli() {
 # script, and copy the file it writes to /data/news/calendar.csv.
 # Usage: calendar FROM TO [SYMBOL]   (dates as YYYY.MM.DD, server time)
 export_calendar() {
+  take_lock
   start_display
   local from="${1:?FROM date (YYYY.MM.DD) needed}" to="${2:?TO date needed}" symbol="${3:-}"
   local name dir files out i
@@ -193,10 +203,57 @@ export_calendar() {
   echo ">> saved $(($(wc -l < "$out/calendar.csv") - 1)) calendar events to data/news/calendar.csv"
 }
 
+# The sync worker: the web page's "Sync now" writes /data/sync/request, this loop
+# runs a download and writes the result. See src/tradequery/syncjobs.py for the files.
+write_kv() {  # write_kv FILE key=value...   (atomic: write then rename)
+  local file="$1"; shift
+  printf '%s\n' "$@" > "$file.tmp" && mv -f "$file.tmp" "$file"
+}
+
+sync_worker() {
+  local dir=/data/sync every=$(( ${SYNC_EVERY_MINUTES:-0} * 60 )) last ready reason now due status
+  mkdir -p "$dir"
+  rm -f "$dir/request"
+  if grep -qs '^state=running' "$dir/job"; then  # the container stopped mid-sync
+    write_kv "$dir/job" state=failed "started=$(sed -n 's/^started=//p' "$dir/job")" "finished=$(date +%s)"
+    echo "The sync was interrupted (the worker restarted)." > "$dir/job.log"
+  fi
+  last=$(date +%s)
+  echo ">> sync worker started (scheduled sync: ${SYNC_EVERY_MINUTES:-0} minutes, 0 = off)"
+  while true; do
+    ready=yes reason=""
+    if [ ! -f "$PROGRAM_FILES/$(terminal_dir)/terminal64.exe" ]; then
+      ready=no reason="MT5 is not set up yet: run make mt5-setup."
+    elif [ -z "${MT5_LOGIN:-}" ] || [ -z "${MT5_INVESTOR_PASSWORD:-}" ] || [ -z "${MT5_SERVER:-}" ]; then
+      ready=no reason="The MT5 login details are missing from .env."
+    fi
+    write_kv "$dir/worker" "login=${MT5_LOGIN:-}" "ready=$ready" "reason=$reason" "beat=$(date +%s)" \
+      "every=${SYNC_EVERY_MINUTES:-0}"
+    now=$(date +%s) due=""
+    [ -f "$dir/request" ] && due=yes
+    [ "$every" -gt 0 ] && [ $((now - last)) -ge "$every" ] && due=yes
+    if [ -n "$due" ]; then
+      rm -f "$dir/request"
+      last=$now
+      if [ "$ready" = yes ]; then
+        echo ">> sync started"
+        write_kv "$dir/job" state=running "started=$now"
+        status=done
+        ( run_cli download ) > "$dir/job.log.tmp" 2>&1 || status=failed
+        tail -n 30 "$dir/job.log.tmp" > "$dir/job.log"; rm -f "$dir/job.log.tmp"
+        write_kv "$dir/job" "state=$status" "started=$now" "finished=$(date +%s)"
+        echo ">> sync $status"
+      fi
+    fi
+    sleep 3
+  done
+}
+
 case "${1:-help}" in
-  setup) setup ;;
+  setup) take_lock; setup ;;
   inspect|download) run_cli "$@" ;;
+  worker) sync_worker ;;
   calendar) shift; export_calendar "$@" ;;
   shell) start_display; exec bash ;;
-  *) sed -n '2,8p' "$0" ;;
+  *) sed -n '2,9p' "$0" ;;
 esac

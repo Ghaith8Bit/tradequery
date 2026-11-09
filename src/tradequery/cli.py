@@ -814,29 +814,11 @@ def cmd_compare(args) -> int:
 
 
 def cmd_import(args) -> int:
-    settings = load_settings()
-    report = parse_report(args.report, settings.clock)
-    path = db.db_path(report.login, args.data_dir)
-    conn = db.connect(path)
-    try:
-        with conn:  # all or nothing
-            new = db.upsert_deals(conn, report.deals, overwrite=False)
-            try:
-                db.load_account(conn)
-                kept = True  # a synced account row is richer than the report's; keep it
-            except LookupError:
-                kept = False
-                db.save_account(
-                    conn,
-                    dict(report.account(), opening_balance=report.opening_balance),
-                    earliest_history=report.deals[0].time_utc,
-                    synced_at=datetime.now(timezone.utc),
-                )
-            trades, flows = db.rebuild_derived(conn, settings)
-            account = db.load_account(conn)
-            stored = db.load_deals(conn)
-    finally:
-        conn.close()
+    from .ingest import import_report
+
+    done = import_report(args.report, args.data_dir, load_settings())
+    report, path, new, kept, account, stored = (done.report, done.path, done.new_deals, done.kept_account,
+                                                done.account, done.stored)
 
     print(f"Report for account {report.login} on {report.server} ({report.currency}, {report.margin_mode})")
     print(f"Deals {_fmt_time(report.deals[0].time_utc)} to {_fmt_time(report.deals[-1].time_utc)} UTC")
@@ -844,7 +826,7 @@ def cmd_import(args) -> int:
     print("Running balance: every deal matches the report's Balance column.")
     print(
         f"\nSaved to {path}: {len(report.deals)} deals in the report ({new} new), "
-        f"{len(trades)} closed trades, {len(flows)} cash flows"
+        f"{done.trades} closed trades, {done.flows} cash flows"
     )
     if kept:
         print("The account was already synced; its stored deals and account facts were kept.")

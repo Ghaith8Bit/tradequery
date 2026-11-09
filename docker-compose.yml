@@ -43,5 +43,23 @@ services:
       - ./data:/data
       - mt5-wine:/home/trader/.wine
 
+  # The page's "Sync now": the same Wine image, waiting for /data/sync/request.
+  # make web starts it when MT5 is set up. SYNC_EVERY_MINUTES in .env also syncs on a timer.
+  sync-worker:
+    build:
+      context: .
+      dockerfile: docker/mt5/Dockerfile
+      args:
+        UID: ${UID:-1000}
+    platform: linux/amd64
+    command: ["worker"]
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/data
+      - mt5-wine:/home/trader/.wine
+    restart: unless-stopped
+
 volumes:
   mt5-wine:
