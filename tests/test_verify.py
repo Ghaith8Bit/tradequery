@@ -52,3 +52,14 @@ def test_numbers_from_the_question_and_spec_are_allowed():
 def test_years_in_result_dates_are_not_counted_and_row_count_is_allowed():
     assert check_numbers("In 2026 there was 1 such episode.", ROWS).ok
     assert check_numbers("Nothing matched.", []).ok
+
+
+def test_a_percentage_never_matches_a_count():
+    # seen live: "overlapped news by 100%" for a 0.0204 share, while the table had 1 row.
+    # (With a 0.9998 depth share in the row, 100% would be a fair rounding of it; numbers alone
+    # cannot tell which column was meant, so the explanation prompt shows shares as percentages.)
+    rows = [[22, "2026-09-25 14:49:38", 10765.07, 48, 0.0204]]
+    check = check_numbers("Your worst drawdown of 10,765.07 overlapped news by 100%.", rows)
+    assert not check.ok and check.unsupported == ["100%"]
+    assert check_numbers("Your worst drawdown of 10,765.07 overlapped news by 2%.", rows).ok
+    assert not check_numbers("48% of trades", rows).ok  # 48 is a count, not a share

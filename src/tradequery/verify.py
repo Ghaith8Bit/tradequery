@@ -48,30 +48,34 @@ def _allowed(rows, extra_numbers, extra_text) -> tuple[list[float], set[str], se
         for m in _NUMBER.finditer(_DATE.sub(" ", text)):
             numbers.append(float(m.group(1).replace(",", "") + (f".{m.group(2)}" if m.group(2) else "")))
 
+    shares: list[float] = []  # decimal cells: the only values a percentage may stand for
     for row in rows:
         for cell in row:
             if isinstance(cell, bool):
                 numbers.append(float(cell))
-            elif isinstance(cell, (int, float)):
+            elif isinstance(cell, float):
+                numbers.append(cell)
+                shares.append(cell)
+            elif isinstance(cell, int):
                 numbers.append(float(cell))
             elif isinstance(cell, str):
                 take_text(cell)
     for text in extra_text:
         take_text(text)
-    return numbers, dates, month_days, times
+    return numbers, shares, dates, month_days, times
 
 
-def _matches(value: float, decimals: int, percent: bool, allowed: list[float]) -> bool:
+def _matches(value: float, decimals: int, percent: bool, allowed: list[float], shares: list[float]) -> bool:
     tolerance = 0.5 * 10 ** -decimals + 1e-9  # rounding to the decimals written
-    candidates = [(value, tolerance)]
     if percent:
-        candidates.append((value / 100, tolerance / 100))  # 62.5% for a 0.625 share
-    return any(abs(abs(a) - abs(c)) <= tol for a in allowed for c, tol in candidates)
+        # 62.5% stands for a 0.625 share in the table, never for a count such as the number of rows
+        return any(abs(abs(a) - value / 100) <= tolerance / 100 for a in shares)
+    return any(abs(abs(a) - value) <= tolerance for a in allowed)
 
 
 def check_numbers(text: str, rows: list[list], *, extra_numbers=(), extra_text=()) -> Check:
     """Is every number in ``text`` supported by the result rows (or the question/spec)?"""
-    numbers, dates, month_days, times = _allowed(rows, list(extra_numbers) + [len(rows)], list(extra_text))
+    numbers, shares, dates, month_days, times = _allowed(rows, list(extra_numbers) + [len(rows)], list(extra_text))
     unsupported, checked = [], 0
     remaining = text
 
@@ -104,6 +108,6 @@ def check_numbers(text: str, rows: list[list], *, extra_numbers=(), extra_text=(
         if not frac and not percent and value in years:
             continue  # a year that appears in the result's dates
         checked += 1
-        if not _matches(value, len(frac) if frac else 0, percent, numbers):
+        if not _matches(value, len(frac) if frac else 0, percent, numbers, shares):
             unsupported.append(m.group(0).strip())
     return Check(not unsupported, unsupported, checked)

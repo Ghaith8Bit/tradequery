@@ -123,3 +123,11 @@ def test_choose_model_prefers_the_newest_stable_flash_lite():
     assert choose_model(names) == "gemini-3.5-flash-lite"
     assert choose_model(["models/gemini-3.8-flash", "models/gemini-3.8-flash-tts"]) == "gemini-3.8-flash"
     assert choose_model(["models/gemini-3.5-pro"]) is None
+
+
+def test_shares_reach_the_model_as_percentages(path):
+    from tradequery.examples import WORST_DRAWDOWN
+    fake = FakeProvider([json.dumps(WORST_DRAWDOWN), "Answer without numbers."])
+    ask("worst drawdown", path, SETTINGS, fake)
+    table = fake.calls[1][1].split("Result table:")[1]
+    assert "%" in table and "0.0" not in table.split(chr(10))[1].split(" | ")[5]  # depth_pct column as a percentage

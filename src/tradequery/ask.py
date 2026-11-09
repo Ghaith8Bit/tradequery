@@ -163,9 +163,22 @@ def _spec_prompt(question: str, context: str, session: Session | None) -> str:
     return "\n\n".join(parts)
 
 
+def is_share_column(name: str) -> bool:
+    """Columns holding a 0-1 share (win rates, drawdown and news shares, returns)."""
+    return name.endswith(("_pct", "_share")) or name.startswith("win_rate") or name == "return_pct"
+
+
+def _cell_text(column: str, value) -> str:
+    if value is None:
+        return ""
+    if is_share_column(column) and isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{value * 100:.2f}%"  # shown as a percentage so the model never converts shares itself
+    return str(value)
+
+
 def _table_text(result: Result) -> str:
     shown = result.rows[:EXPLAIN_ROWS]
-    lines = [" | ".join(result.columns)] + [" | ".join("" if v is None else str(v) for v in r) for r in shown]
+    lines = [" | ".join(result.columns)] + [" | ".join(_cell_text(c, v) for c, v in zip(result.columns, r)) for r in shown]
     more = len(result.rows) - len(shown)
     if more > 0:
         lines.append(f"({more} more rows not shown)")
