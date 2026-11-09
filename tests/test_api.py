@@ -58,6 +58,21 @@ def test_status_without_a_key_says_so(root):
     assert c.post("/api/preset", json={"login": 1001, "number": 11}).status_code == 200
 
 
+def test_the_overview_for_the_start_screen(root):
+    c, fake = client(root)
+    o = c.get("/api/overview", params={"login": 1001}).json()
+    assert o["login"] == 1001 and o["trades"] == 48 and o["currency"] == "USD"
+    assert o["stats"]["net_profit"] is not None and 0 <= o["stats"]["win_rate"] <= 1
+    curve = o["balance_curve"]
+    assert 1 < len(curve) <= 48 and all(isinstance(b, float) for _, b in curve)
+    days = [d for d, _ in o["by_weekday"]]
+    assert days[:5] == ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    assert round(sum(v for _, v in o["by_weekday"]), 2) == round(o["stats"]["net_profit"], 2)
+    assert all(f["level"] in ("warn", "info") and f["text"] for f in o["facts"])
+    assert fake.calls == []  # the overview never calls the model
+    assert c.get("/api/overview", params={"login": 4242}).status_code == 404
+
+
 def test_a_preset_runs_without_the_model(root):
     c, fake = client(root)
     data = c.post("/api/preset", json={"login": 1001, "number": 11}).json()  # longest losing streak

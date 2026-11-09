@@ -31,6 +31,7 @@ from .evaluate import EVAL_LOGIN as SAMPLE_LOGIN
 from .examples import EXAMPLES
 from .execute import QueryTimeout, Result, execute
 from .llm import LLMError, Provider, provider_from_env
+from .overview import build_overview
 from .settings import Settings, data_dir, load_settings
 from .spec import SpecError, parse_spec
 
@@ -142,6 +143,10 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
             out.append({"login": login, "currency": account.get("currency"), "server": account.get("server"),
                         "trades": span[2], "first": span[0], "last": span[1]})
         return out
+
+    @app.get("/api/overview")
+    def overview(login: int):
+        return build_overview(account_path(login), settings)
 
     @app.get("/api/status")
     def status():
