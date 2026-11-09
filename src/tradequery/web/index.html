@@ -21,6 +21,7 @@
     }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--text);
          font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
@@ -129,6 +130,41 @@
   .hint { max-width: 860px; margin: 6px auto 0; font-size: 12px; color: var(--muted); text-align: center; }
   .backdrop { display: none; }
 
+  /* account freshness, sync and upload */
+  .acct-meta { font-size: 12px; color: var(--muted); margin-top: -4px; min-height: 16px; }
+  .acct-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .acct-actions button { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; padding: 7px 6px;
+                         cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+  .acct-actions button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .acct-actions button:disabled { opacity: .5; cursor: default; }
+  .spin { width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+          animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .toast { position: fixed; z-index: 40; left: 50%; bottom: 96px; transform: translateX(-50%); max-width: min(560px, calc(100vw - 32px));
+           background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 12px; font-size: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+  .toast.bad { background: var(--bad); color: #fff; }
+  .drop { position: fixed; inset: 0; z-index: 50; background: rgba(47, 107, 255, .12); border: 3px dashed var(--accent);
+          display: grid; place-items: center; font-size: 20px; font-weight: 700; color: var(--accent); pointer-events: none; }
+
+  /* clickable ids in answer tables */
+  .id-link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit;
+             text-decoration: underline; text-underline-offset: 2px; }
+
+  /* the chart window */
+  .modal { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .45); display: grid; place-items: center; padding: 16px; }
+  .sheet { background: var(--panel); border-radius: 16px; width: min(940px, 100%); max-height: calc(100dvh - 32px); overflow: auto;
+           box-shadow: 0 10px 40px rgba(0, 0, 0, .3); }
+  .sheet header { position: sticky; top: 0; background: var(--panel); display: flex; align-items: center; gap: 10px;
+                  padding: 12px 16px; border-bottom: 1px solid var(--line); z-index: 1; }
+  .sheet header .t { flex: 1; font-weight: 700; }
+  .sheet .content { padding: 12px 16px 16px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .kv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+  .kv div { background: var(--code); border-radius: 10px; padding: 7px 10px; font-size: 13px; }
+  .kv b { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
+  .tile.link { cursor: pointer; } .tile.link:hover { border-color: var(--accent); }
+
   /* phones and small tablets */
   @media (max-width: 820px) {
     aside { position: fixed; z-index: 20; top: 0; bottom: 0; left: 0; transform: translateX(-100%); transition: transform .2s;
@@ -143,6 +179,9 @@
     .msg.bot .avatar { display: none; }
     .hello { font-size: 20px; }
     .composer { padding-left: 10px; padding-right: 10px; }
+    .modal { padding: 0; place-items: stretch; }
+    .sheet { border-radius: 0; max-height: 100dvh; height: 100dvh; width: 100%; }
+    .kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 </style>
 </head>
@@ -152,6 +191,12 @@
     <div class="brand"><span class="logo">TQ</span> TradeQuery</div>
     <label class="small" for="account">Account</label>
     <select id="account"></select>
+    <div class="acct-meta" id="updated"></div>
+    <div class="acct-actions">
+      <button type="button" id="syncBtn" title="Download new trades from MT5">Sync now</button>
+      <button type="button" id="uploadBtn" title="Add an MT5 history report (.html)">Upload report</button>
+    </div>
+    <input type="file" id="fileInput" accept=".html,.htm,text/html" hidden>
     <button class="new-chat" id="newChat" type="button">+ New chat</button>
     <div class="history-title">Chats</div>
     <div class="history" id="history"></div>
@@ -178,6 +223,19 @@
     </form>
   </main>
 </div>
+<div class="modal" id="modal" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <header>
+      <div class="t" id="modalTitle"></div>
+      <button class="icon-btn" id="modalClose" type="button" aria-label="Close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="content" id="modalBody"></div>
+  </div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<div class="drop" id="drop" hidden>Drop your MT5 report to add it</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -212,6 +270,7 @@ function cell(col, v, shares) {
   if (v === null || v === undefined) return "–";
   if (typeof v === "number") {
     if (shares.includes(col)) return (v * 100).toFixed(2) + "%";
+    if (/lot/.test(col) && !/multiplier/.test(col)) return v.toFixed(2);
     if (Number.isInteger(v)) return String(v);
     return Math.abs(v) < 1 ? v.toFixed(4) : fmt2.format(v);
   }
@@ -295,6 +354,174 @@ function autoChart(result) {
   return wrap;
 }
 
+/* ---------- price chart for a trade or a sequence ---------- */
+const toMs = (s) => Date.parse(String(s).slice(0, 19).replace(" ", "T") + "Z");
+const shortTime = (s) => String(s).slice(5, 16);  // MM-DD HH:MM
+const REASONS = { sl: "stop loss", tp: "take profit", so: "stop-out", client: "closed by hand", mobile: "closed by hand (phone)",
+                  web: "closed by hand (web)", expert: "closed by the EA", "": "–" };
+function priceDigits(p) { return p < 10 ? 5 : p < 1000 ? 3 : 2; }
+
+function candleChart(data) {
+  const W = 900, H = 380, padL = 66, padR = 46, padT = 14, padB = 30;
+  // Candles sit side by side, skipping hours without prices (weekends), as trading
+  // platforms do; a fill is placed on the candle whose time span holds it.
+  const C = data.candles, n = C.length;
+  const step = data.minutes_per_candle * 60000, times = C.map((c) => toMs(c[0]));
+  const slot = (W - padL - padR) / n;
+  const xAt = (ms) => {
+    let lo = 0, hi = n - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (times[mid] <= ms) lo = mid; else hi = mid - 1; }
+    const frac = Math.min(1, Math.max(0, (ms - times[lo]) / step));
+    return padL + (lo + frac) * slot;
+  };
+  let lo = Math.min(...C.map((c) => c[3]), ...data.markers.map((m) => m.price));
+  let hi = Math.max(...C.map((c) => c[2]), ...data.markers.map((m) => m.price));
+  const span0 = hi - lo || hi * 0.001 || 1;
+  const shown = [], offChart = [];
+  data.lines.forEach((l) => (l.price >= lo - span0 * 0.6 && l.price <= hi + span0 * 0.6 ? shown : offChart).push(l));
+  shown.forEach((l) => { lo = Math.min(lo, l.price); hi = Math.max(hi, l.price); });
+  const pad = (hi - lo || span0) * 0.06; lo -= pad; hi += pad;
+  const y = (p) => padT + (hi - p) / (hi - lo) * (H - padT - padB);
+  const digits = priceDigits(hi);
+  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, role: "img" });
+  for (let i = 0; i <= 4; i++) {
+    const p = lo + (hi - lo) * i / 4;
+    root.appendChild(svg("line", { x1: padL, x2: W - padR, y1: y(p), y2: y(p), stroke: "var(--grid)" }));
+    root.appendChild(svg("text", { x: padL - 6, y: y(p) + 4, "text-anchor": "end", "font-size": 11, fill: "var(--muted)" }, p.toFixed(digits)));
+  }
+  [0, Math.floor((n - 1) / 2), n - 1].forEach((i, k) => root.appendChild(svg("text", {
+    x: padL + (i + 0.5) * slot, y: H - 10, "text-anchor": k === 0 ? "start" : k === 2 ? "end" : "middle",
+    "font-size": 11, fill: "var(--muted)" }, shortTime(C[i][0]))));
+  // a dotted line where hours without prices were skipped
+  for (let i = 1; i < n; i++) {
+    if (times[i] - times[i - 1] > Math.max(step * 6, 3600000)) {
+      const x = padL + i * slot;
+      root.appendChild(svg("line", { x1: x, x2: x, y1: padT, y2: H - padB, stroke: "var(--muted)", "stroke-dasharray": "2 4", opacity: 0.6 }));
+      const g = svg("text", { x: x + 3, y: padT + 10, "font-size": 10, fill: "var(--muted)" },
+        `${Math.round((times[i] - times[i - 1]) / 3600000)} h without prices`);
+      root.appendChild(g);
+    }
+  }
+  const bw = Math.max(1, slot * 0.62);
+  C.forEach(([t, o, h, l, c], i) => {
+    const x = padL + (i + 0.5) * slot, color = c >= o ? "var(--good)" : "var(--neg)";
+    const g = svg("g", { opacity: 0.55 });
+    g.appendChild(svg("line", { x1: x, x2: x, y1: y(h), y2: y(l), stroke: color }));
+    g.appendChild(svg("rect", { x: x - bw / 2, y: y(Math.max(o, c)), width: bw, height: Math.max(1, Math.abs(y(o) - y(c))), fill: color }));
+    g.appendChild(svg("title", {}, `${t} UTC  O ${o} H ${h} L ${l} C ${c}`));
+    root.appendChild(g);
+  });
+  shown.forEach((l) => {
+    root.appendChild(svg("line", { x1: padL, x2: W - padR, y1: y(l.price), y2: y(l.price), stroke: l.label === "SL" ? "var(--neg)" : "var(--good)",
+      "stroke-dasharray": "6 4", "stroke-width": 1.5 }));
+    root.appendChild(svg("text", { x: W - padR + 4, y: y(l.price) + 4, "font-size": 11, fill: "var(--muted)" }, l.label));
+  });
+  const byPos = {};
+  data.markers.forEach((m) => { (byPos[m.position_id] = byPos[m.position_id] || {})[m.kind] = m; });
+  const many = Object.keys(byPos).length;
+  Object.values(byPos).forEach(({ entry, exit }) => {
+    if (!entry || !exit) return;
+    root.appendChild(svg("line", { x1: xAt(toMs(entry.time)), y1: y(entry.price), x2: xAt(toMs(exit.time)), y2: y(exit.price),
+      stroke: "var(--muted)", "stroke-dasharray": "3 3", "stroke-width": 1 }));
+  });
+  data.markers.forEach((m) => {
+    const x = xAt(toMs(m.time)), py = y(m.price);
+    let shape;
+    if (m.kind === "entry") {
+      const up = m.side === "buy", s = 7;
+      shape = svg("path", { d: up ? `M${x},${py - s} L${x + s},${py + s} L${x - s},${py + s} Z` : `M${x},${py + s} L${x + s},${py - s} L${x - s},${py - s} Z`,
+        fill: up ? "var(--accent)" : "var(--warn)", stroke: "var(--panel)", "stroke-width": 1 });
+      shape.appendChild(svg("title", {}, `Entry ${m.side} ${m.lots} lots at ${m.price} · ${m.time} UTC` + (many > 1 ? ` · level ${m.level}` : "")));
+      if (many > 1 && many <= 16) root.appendChild(svg("text", { x: x - 9, y: py + 4, "text-anchor": "end", "font-size": 10, fill: "var(--muted)" }, String(m.level)));
+    } else {
+      shape = svg("circle", { cx: x, cy: py, r: 5, fill: (m.net || 0) >= 0 ? "var(--good)" : "var(--neg)", stroke: "var(--panel)", "stroke-width": 1.5 });
+      shape.appendChild(svg("title", {}, `Exit at ${m.price} · ${m.time} UTC · net ${fmt2.format(m.net || 0)}`));
+    }
+    root.appendChild(shape);
+  });
+  return { node: root, offChart };
+}
+
+function kv(pairs) {
+  const box = el("div", { class: "kv" });
+  pairs.forEach(([k, v]) => { const d = el("div"); d.appendChild(el("b", {}, k)); d.appendChild(document.createTextNode(v)); box.appendChild(d); });
+  return box;
+}
+function legend(data) {
+  const box = el("div", { class: "legend" });
+  const item = (shape, text) => { const s = el("span"); s.appendChild(shape); s.appendChild(document.createTextNode(text)); box.appendChild(s); };
+  const icon = (d, fill) => { const s = svg("svg", { width: 12, height: 12, viewBox: "0 0 12 12" }); s.appendChild(svg("path", { d, fill })); return s; };
+  item(icon("M6,1 L11,11 L1,11 Z", "var(--accent)"), "buy entry");
+  item(icon("M6,11 L11,1 L1,1 Z", "var(--warn)"), "sell entry");
+  item(icon("M6,1 a5,5 0 1,0 0.01,0 Z", "var(--good)"), "exit in profit");
+  item(icon("M6,1 a5,5 0 1,0 0.01,0 Z", "var(--neg)"), "exit at a loss");
+  box.appendChild(el("span", {}, `${data.symbol} · ${data.minutes_per_candle}-minute candles · UTC`));
+  return box;
+}
+function chartBlock(data, body) {
+  if (data.candles.length) {
+    body.appendChild(legend(data));
+    const { node, offChart } = candleChart(data);
+    const wrap = el("div", { class: "chart" }); wrap.appendChild(node); body.appendChild(wrap);
+    offChart.forEach((l) => body.appendChild(el("div", { class: "note" }, `${l.label} at ${l.price} is far outside this chart.`)));
+  } else {
+    body.appendChild(el("div", { class: "note" }, data.note));
+  }
+}
+function hours(min) { return min >= 120 ? `${(min / 60).toFixed(1)} h` : `${Math.round(min)} min`; }
+
+async function openChart(kind, id) {
+  const modal = $("modal"), body = $("modalBody");
+  $("modalTitle").textContent = kind === "trade" ? `Trade ${id}` : `Sequence ${id}`;
+  body.replaceChildren(el("div", { class: "sub" }, "Loading the price chart…"));
+  modal.hidden = false;
+  $("modalClose").focus();
+  let data;
+  try {
+    data = await api(kind === "trade" ? `/api/trade?login=${state.login}&position_id=${id}` : `/api/sequence?login=${state.login}&sequence_id=${id}`);
+  } catch (error) {
+    body.replaceChildren(el("div", { class: "error" }, error.message));
+    return;
+  }
+  body.replaceChildren();
+  if (kind === "trade") {
+    const t = data.trade;
+    $("modalTitle").textContent = `Trade ${t.position_id} · ${t.symbol} ${t.side} ${t.lots} lots`;
+    chartBlock(data, body);
+    body.appendChild(kv([
+      ["Opened (UTC)", `${t.open_time_utc.slice(0, 16)} at ${t.open_price}`],
+      ["Closed (UTC)", `${t.close_time_utc.slice(0, 16)} at ${t.close_price}`],
+      ["Net result", `${money(t.net_profit)}`], ["Held", hours(t.hold_minutes)],
+      ["Closed by", REASONS[t.close_reason] || t.close_reason], ["Stop loss", t.sl ? String(t.sl) : "none"],
+      ["Take profit", t.tp ? String(t.tp) : "none"], ["Outcome", t.outcome || "–"],
+    ]));
+    if (data.sequence_id) {
+      const b = el("button", { class: "chip", type: "button", style: "margin-top:12px" }, `Show its whole sequence (${data.sequence_id})`);
+      b.addEventListener("click", () => openChart("sequence", data.sequence_id));
+      body.appendChild(b);
+    }
+  } else {
+    const s = data.sequence;
+    $("modalTitle").textContent = `Sequence ${s.sequence_id} · ${s.symbol} ${s.type.replace("_", " + ")} · ${s.depth} levels`;
+    chartBlock(data, body);
+    body.appendChild(kv([
+      ["Side", s.side], ["Levels", String(s.depth)], ["Lots", `${s.first_lot} → ${s.max_lot} (${s.max_lot_multiplier}×)`],
+      ["Most open at once", String(s.max_open)], ["Started (UTC)", s.start_utc.slice(0, 16)], ["Ended (UTC)", s.end_utc.slice(0, 16)],
+      ["Net result", money(s.net_pnl)], ["Outcome", s.is_win ? "closed in profit" : "closed at a loss"],
+    ]));
+    const result = {
+      columns: ["level", "position_id", "open_time_utc", "lots", "open_price", "close_price", "net_profit"],
+      rows: data.trades.map((t, i) => [i + 1, t.position_id, t.open_time_utc.slice(0, 16), t.lots, t.open_price, t.close_price, t.net_profit]),
+      share_columns: [],
+    };
+    body.appendChild(renderTable(result, result.rows.length));
+  }
+}
+function closeChart() { $("modal").hidden = true; }
+$("modalClose").addEventListener("click", closeChart);
+$("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeChart(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("modal").hidden) closeChart(); });
+
 /* ---------- overview (the start screen) ---------- */
 function tile(k, v, s, cls = "") {
   const t = el("div", { class: "tile" });
@@ -318,8 +545,17 @@ function renderOverview(container) {
     tiles.appendChild(tile("Worst drawdown", `${money(s.max_drawdown)}`, pct(s.max_drawdown_pct) + " of the money at stake",
       s.max_drawdown_pct >= 0.5 ? "neg" : ""));
     const deep = s.deepest_sequence;
-    tiles.appendChild(tile("Deepest sequence", deep ? `${deep.depth} levels` : "none",
-      deep ? `${deep.multiplier}× lots · net ${money(deep.net)}` : "no martingale or grid", deep && deep.depth >= 6 ? "neg" : ""));
+    const deepTile = tile("Deepest sequence", deep ? `${deep.depth} levels` : "none",
+      deep ? `${deep.multiplier}× lots · net ${money(deep.net)} · tap for the chart` : "no martingale or grid",
+      deep && deep.depth >= 6 ? "neg" : "");
+    if (deep && deep.id) {
+      deepTile.classList.add("link");
+      deepTile.setAttribute("role", "button");
+      deepTile.setAttribute("tabindex", "0");
+      deepTile.addEventListener("click", () => openChart("sequence", deep.id));
+      deepTile.addEventListener("keydown", (e) => { if (e.key === "Enter") openChart("sequence", deep.id); });
+    }
+    tiles.appendChild(deepTile);
     tiles.appendChild(tile("Trades", String(o.trades), `${s.withdrawals ? "withdrawn " + money(-s.withdrawals) : ""}`));
     container.appendChild(tiles);
     const charts = el("div", { class: "charts" });
@@ -376,7 +612,18 @@ function renderTable(result, limit) {
     const tr = el("tr");
     row.forEach((v, i) => {
       const num = typeof v === "number";
-      tr.appendChild(el("td", { class: (num ? "num" : "") + (num && v < 0 ? " neg" : "") }, cell(result.columns[i], v, result.share_columns)));
+      const col = result.columns[i];
+      const td = el("td", { class: (num ? "num" : "") + (num && v < 0 ? " neg" : "") });
+      const kind = col === "position_id" ? "trade" : col === "sequence_id" ? "sequence" : null;
+      if (kind && Number.isInteger(v)) {
+        const link = el("button", { class: "id-link", type: "button", title: `Show this ${kind} on a price chart`,
+          "aria-label": `${kind} ${v}: show on a price chart` }, String(v));
+        link.addEventListener("click", () => openChart(kind, v));
+        td.appendChild(link);
+      } else {
+        td.textContent = cell(col, v, result.share_columns);
+      }
+      tr.appendChild(td);
     });
     body.appendChild(tr);
   });
@@ -522,20 +769,148 @@ function closeMenu() { $("sidebar").classList.remove("open"); $("backdrop").clas
 $("menu").addEventListener("click", openMenu);
 $("backdrop").addEventListener("click", closeMenu);
 
+async function loadOverview() {
+  const login = state.login;
+  try { state.overview = await api(`/api/overview?login=${login}`); }
+  catch (error) { state.overview = { login, trades: 0, facts: [], balance_curve: [], by_weekday: [], stats: null, error: error.message }; }
+  if (login === state.login && !currentChat()) renderThread();
+}
 async function selectAccount(login) {
   state.login = login;
   state.chats = store.load(login);
   state.chatId = null;
   state.overview = null;
+  $("account").value = String(login);
   const acct = state.accounts.find((a) => a.login === login);
   $("topTitle").textContent = acct ? `${acct.login} · ${acct.currency || ""}` : "TradeQuery";
   renderHistory();
   renderThread();
-  try { state.overview = await api(`/api/overview?login=${login}`); }
-  catch (error) { state.overview = { login, trades: 0, facts: [], balance_curve: [], by_weekday: [], stats: null, error: error.message }; }
-  if (!currentChat()) renderThread();
+  renderFreshness();
+  await loadOverview();
 }
 $("account").addEventListener("change", () => { selectAccount(Number($("account").value)); closeMenu(); });
+
+/* ---------- accounts, freshness, sync and upload ---------- */
+function ago(utc) {
+  const min = (Date.now() - toMs(utc)) / 60000;
+  if (!isFinite(min)) return "";
+  if (min < 1.5) return "just now";
+  if (min < 90) return `${Math.round(min)} min ago`;
+  if (min < 36 * 60) return `${Math.round(min / 60)} h ago`;
+  return `${Math.round(min / 1440)} days ago`;
+}
+function renderFreshness() {
+  const a = state.accounts.find((x) => x.login === state.login);
+  const sample = a && a.server === "Synthetic";
+  $("updated").textContent = !a ? "" : sample ? "Sample account with made-up trades"
+    : `Updated ${a.synced_at ? ago(a.synced_at) : "–"}` + (a.last ? ` · newest trade ${a.last.slice(0, 10)}` : "");
+  renderSyncButton();
+}
+function fillAccounts() {
+  const select = $("account");
+  select.replaceChildren();
+  state.accounts.forEach((a) => {
+    const span = a.first ? ` · ${a.first.slice(0, 10)} to ${a.last.slice(0, 10)}` : "";
+    select.appendChild(el("option", { value: a.login }, `${a.login} · ${a.currency || ""} · ${a.trades} trades${span}`));
+  });
+  if (state.login) select.value = String(state.login);
+}
+async function refreshAccounts(selectLogin) {
+  state.accounts = await api("/api/accounts");
+  fillAccounts();
+  if (selectLogin && selectLogin !== state.login) return selectAccount(selectLogin);
+  if (!state.login && state.accounts.length) return selectAccount(state.accounts[0].login);
+  renderFreshness();
+  await loadOverview();
+}
+let toastTimer = null;
+function toast(text, { bad = false, stay = false } = {}) {
+  const t = $("toast");
+  t.textContent = text;
+  t.className = "toast" + (bad ? " bad" : "");
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  if (!stay) toastTimer = setTimeout(() => { t.hidden = true; }, bad ? 9000 : 5000);
+}
+function busyButton(button, text) {
+  button.replaceChildren(el("span", { class: "spin" }), document.createTextNode(text));
+  button.disabled = true;
+}
+
+/* Sync now: the MT5 sync worker does the download; the page asks for it and watches. */
+state.sync = null;
+state.syncSeen = undefined;  // the last finished time already reported
+function renderSyncButton() {
+  const b = $("syncBtn"), s = state.sync;
+  const running = s && (s.state === "running" || s.requested);
+  if (running) { busyButton(b, "Syncing…"); b.title = "Downloading new trades from MT5"; return; }
+  b.replaceChildren(document.createTextNode("Sync now"));
+  const mine = s && s.available && s.login === state.login;
+  b.disabled = !mine;
+  b.title = !s ? "Checking the MT5 sync…" : !s.available ? s.reason
+    : s.login !== state.login ? `Sync works for account ${s.login}, the one in .env.` : "Download new trades from MT5";
+}
+async function pollSync() {
+  let s;
+  try { s = await api("/api/sync"); } catch { s = null; }
+  const before = state.syncSeen;
+  state.sync = s;
+  if (s) {
+    if (before !== undefined && s.finished && s.finished !== before && s.state !== "running") {
+      if (s.state === "done") { toast("Sync finished: the latest trades are loaded."); refreshAccounts(); }
+      else toast("The sync failed: " + (s.message || "see the sync worker's log."), { bad: true });
+    }
+    state.syncSeen = s.finished || null;
+  }
+  renderSyncButton();
+  const running = s && (s.state === "running" || s.requested);
+  setTimeout(pollSync, running ? 3000 : 20000);
+}
+$("syncBtn").addEventListener("click", async () => {
+  try {
+    state.sync = await api("/api/sync", {});
+    renderSyncButton();
+    toast("Syncing with MT5. This takes a minute or two; you can keep asking questions.");
+  } catch (error) {
+    toast(error.message, { bad: true });
+  }
+});
+
+/* Upload report: the button, or a file dropped anywhere on the page. */
+async function uploadReport(file) {
+  if (!file) return;
+  if (!/\.html?$/i.test(file.name)) { toast("Choose the MT5 history report: an .html file (Save as Report in MT5).", { bad: true }); return; }
+  const b = $("uploadBtn");
+  busyButton(b, "Reading…");
+  toast(`Reading ${file.name}…`, { stay: true });
+  try {
+    const res = await fetch("/api/import", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Upload failed (${res.status})`);
+    toast(data.new_deals
+      ? `Added to account ${data.login}: ${data.new_deals} new deals, ${data.trades} closed trades in total.`
+      : `Account ${data.login} already had all ${data.deals} deals in this report; nothing new.`);
+    await refreshAccounts(data.login);
+  } catch (error) {
+    toast(error.message, { bad: true });
+  } finally {
+    b.replaceChildren(document.createTextNode("Upload report"));
+    b.disabled = false;
+    $("fileInput").value = "";
+  }
+}
+$("uploadBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", () => { uploadReport($("fileInput").files[0]); closeMenu(); });
+let dragDepth = 0;
+const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+window.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $("drop").hidden = false; });
+window.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener("dragleave", () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $("drop").hidden = true; });
+window.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $("drop").hidden = true;
+  uploadReport(e.dataTransfer.files[0]);
+});
 
 async function start() {
   try {
@@ -544,16 +919,15 @@ async function start() {
     $("thread").replaceChildren(el("div", { class: "error" }, "Could not reach TradeQuery: " + error.message));
     return;
   }
+  pollSync();
   if (!state.accounts.length) {
-    $("thread").replaceChildren(el("div", { class: "hello" }, "No account yet"),
-      el("p", { class: "sub" }, "Run make sync, import an MT5 report, or run make sample, then reload this page."));
-    return;
+    $("thread").replaceChildren(el("div", { class: "hello" }, "Add your first account"),
+      el("p", { class: "sub" }, "Drop an MT5 history report (.html) anywhere on this page, or use Upload report. "
+        + "In MT5: History tab, right-click, Report, HTML."));
+  } else {
+    fillAccounts();
+    selectAccount(state.accounts[0].login);
   }
-  state.accounts.forEach((a) => {
-    const span = a.first ? ` · ${a.first.slice(0, 10)} to ${a.last.slice(0, 10)}` : "";
-    $("account").appendChild(el("option", { value: a.login }, `${a.login} · ${a.currency || ""} · ${a.trades} trades${span}`));
-  });
-  selectAccount(state.accounts[0].login);
   try {
     const s = await api("/api/status");
     state.modelReady = s.ready;

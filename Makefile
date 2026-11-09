@@ -46,12 +46,16 @@ ask:         ## ask in plain English: make ask Q="which hour loses the most on g
 eval:        ## run the eval suite on Gemini (about 160 requests): make eval [ARGS="--limit 10"]
 	$(RUN) -v $(CURDIR)/evals:/app/evals app eval $(ARGS)
 
-web:         ## start the web page in the background: http://localhost:8000 (stop: make web-stop)
-	$(DC) up -d --build web
-	@echo "TradeQuery is running at http://localhost:8000"
+# The sync worker (the page's "Sync now") needs the Wine volume from make mt5-setup.
+MT5_READY = $(shell docker volume ls -q 2>/dev/null | grep -q 'mt5-wine$$' && echo yes)
 
-web-stop:    ## stop the web page
-	$(DC) stop web
+web:         ## start the web page in the background: http://localhost:8000 (stop: make web-stop)
+	$(DC) up -d --build web $(if $(MT5_READY),sync-worker,)
+	@echo "TradeQuery is running at http://localhost:8000"
+	@$(if $(MT5_READY),echo "Sync now is available on the page (the MT5 sync worker is running).",echo "No MT5 set up: upload reports from the page, or run make mt5-setup for Sync now.")
+
+web-stop:    ## stop the web page and the sync worker
+	$(DC) stop web sync-worker
 
 shell-mt5:   ## debug shell in the Wine container
 	$(RUN) mt5 shell

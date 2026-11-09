@@ -7,6 +7,12 @@
   POST /api/ask           a plain-English question, with a session id for follow-ups
   POST /api/preset        one example question, by number: no model call, instant
   POST /api/query         a hand-written QuerySpec
+  GET  /api/overview      the start screen: key numbers, two charts, risk facts
+  POST /api/import        upload an MT5 HTML history report (the file is the request body)
+  GET  /api/sync          the MT5 sync worker: available, running, last result
+  POST /api/sync          ask the worker to sync now
+  GET  /api/trade         one trade on a price chart (stored one-minute bars)
+  GET  /api/sequence      one martingale/grid sequence on a price chart
 
 Every request opens exactly one account database, read-only. Answers carry the
 interpretation line, notes, the result table, the spec and the SQL, so the page
@@ -16,28 +22,33 @@ calls are rate limited per process.
 
 from __future__ import annotations
 
+import tempfile
 import time
 import uuid
 from collections import OrderedDict, deque
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-from . import db
+from . import db, syncjobs
 from .ask import Answer, Session, ask, is_share_column
 from .evaluate import EVAL_LOGIN as SAMPLE_LOGIN
 from .examples import EXAMPLES
 from .execute import QueryTimeout, Result, execute
+from .importers.mt5_report import ReportError
+from .ingest import import_report
 from .llm import LLMError, Provider, provider_from_env
 from .overview import build_overview
+from .pricechart import NotFound, sequence_chart, trade_chart
 from .settings import Settings, data_dir, load_settings
 from .spec import SpecError, parse_spec
 
 PAGE = Path(__file__).with_name("web") / "index.html"
 MAX_SESSIONS = 200
 MODEL_CALLS_PER_MINUTE = 20
+MAX_REPORT_BYTES = 30 * 1024 * 1024  # a year of busy trading is a few MB
 
 
 class AskBody(BaseModel):
@@ -141,12 +152,60 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
             finally:
                 conn.close()
             out.append({"login": login, "currency": account.get("currency"), "server": account.get("server"),
-                        "trades": span[2], "first": span[0], "last": span[1]})
+                        "trades": span[2], "first": span[0], "last": span[1],
+                        "synced_at": (account.get("synced_at_utc") or "")[:19] or None})
         return out
 
     @app.get("/api/overview")
     def overview(login: int):
         return build_overview(account_path(login), settings)
+
+    @app.post("/api/import")
+    async def import_upload(request: Request):
+        body = await request.body()
+        if not body:
+            raise HTTPException(400, "The file was empty.")
+        if len(body) > MAX_REPORT_BYTES:
+            raise HTTPException(413, "That file is too large for an MT5 history report.")
+        with tempfile.TemporaryDirectory() as tmp:
+            report_file = Path(tmp) / "report.html"
+            report_file.write_bytes(body)
+            try:
+                done = import_report(report_file, root, settings)
+            except ReportError as error:
+                raise HTTPException(400, f"This doesn't look like an MT5 history report: {error}") from None
+        report = done.report
+        return {"login": report.login, "server": report.server, "currency": report.currency,
+                "deals": len(report.deals), "new_deals": done.new_deals, "trades": done.trades,
+                "kept_account": done.kept_account,
+                "first": db.format_time(report.deals[0].time_utc), "last": db.format_time(report.deals[-1].time_utc)}
+
+    @app.get("/api/sync")
+    def sync_status():
+        return syncjobs.sync_status(root)
+
+    @app.post("/api/sync")
+    def sync_now():
+        try:
+            return syncjobs.request_sync(root)
+        except syncjobs.SyncUnavailable as error:
+            raise HTTPException(503, str(error)) from None
+        except syncjobs.SyncBusy as error:
+            raise HTTPException(409, str(error)) from None
+
+    @app.get("/api/trade")
+    def trade(login: int, position_id: int):
+        try:
+            return trade_chart(account_path(login), position_id)
+        except NotFound as error:
+            raise HTTPException(404, str(error)) from None
+
+    @app.get("/api/sequence")
+    def sequence(login: int, sequence_id: int):
+        try:
+            return sequence_chart(account_path(login), sequence_id)
+        except NotFound as error:
+            raise HTTPException(404, str(error)) from None
 
     @app.get("/api/status")
     def status():
