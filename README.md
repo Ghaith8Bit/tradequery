@@ -2,43 +2,61 @@
 
 Ask plain-English questions about your MT5 trade history and get a verified table and a short explanation back.
 
-> **Status:** data layer working. A live MT5 account syncs into a per-account SQLite database, MT5 HTML reports import into the same format, and the two are cross-checked deal by deal. Metrics, detectors and the question-answering layer come next.
+<!-- Screenshot: save one as docs/screenshot.png (http://localhost:8000 with the sample account) and uncomment:
+![TradeQuery answering a question](docs/screenshot.png) -->
 
-## The idea
+> **v1.0.0.** Live MT5 sync and report import, named metrics, a price path from one-minute bars, risk detectors with
+> evidence, martingale and grid sequences, news overlap, plain-English questions (Gemini) with a number checker, a web
+> page, and an 80-question eval suite. The story behind it: [docs/case-study.md](docs/case-study.md).
 
-Code computes every number (win rate, drawdown, swap, R-multiples, streaks, lots open). The language model only turns a question into a structured query and explains the result, and a checker confirms every number in the explanation matches the result table.
+## The problem
 
-## How it runs
+MT5 shows every deal but answers nothing. "Which hour loses me the most on gold?", "How deep did my martingale baskets
+go before they closed green?", "Did news cause my worst drawdown?" take spreadsheets, and spreadsheets quietly treat a
+withdrawal as a loss or the broker's server clock as UTC. A language model can read the question, but it cannot be
+trusted with the arithmetic.
 
-Two containers share one `./data` folder:
+## How it works
 
-| Service | What it does |
-|---|---|
-| `app` | Linux Python: tests, demo, report import, cross-check and analysis of stored accounts (later: API and UI). |
-| `mt5` | Debian + Wine + the MT5 terminal + **Windows** Python. Its only job is to log in with the investor password and write the account history to `./data`. |
+**Code computes every number; the model only translates.**
 
-The `MetaTrader5` Python package exists only for Windows, so the sync runs inside Wine. Everything after the sync is ordinary Linux code and never needs MT5.
+```
+question --model, call 1--> QuerySpec (typed JSON, never SQL)
+         --> whitelist check --> parameterized SQL on a read-only per-account SQLite database --> result table
+         --model, call 2, sees only the table--> short answer --> every number checked against the table --> shown
+```
 
-Each account gets one SQLite file, `data/accounts/<login>.db`, with these tables: `accounts`, `symbols`, `deals` (the source of truth, upserted by ticket), and `cash_flows` and `trades` (rebuilt from deals on every sync or import).
+- Every metric (win rate, profit factor, R, streaks, drawdown, lots open, swap, ...) comes from tested code with a written definition.
+- Each answer carries an **interpretation line** (account, filters, time range, timezone) and the spec and SQL behind it.
+- An answer with a number that is not in the table is retried once, then shown as the table alone.
+- Two containers share `./data`: `app` (Linux Python: analysis, questions, the web page) and `mt5` (Debian, Wine, the MT5 terminal and **Windows** Python, only for the sync, since the `MetaTrader5` package exists only for Windows). One SQLite file per account: `data/accounts/<login>.db`.
 
-## Setup (Windows + WSL2)
+## Quick start (no MT5 needed)
 
-1. Install WSL2 with Ubuntu, and Docker (Docker Desktop with WSL integration, or docker-ce inside WSL). `docker compose version` must work in the WSL shell.
-2. Keep the project in the **WSL filesystem** (for example `~/tradequery`), not under `/mnt/c`. Docker and Wine are much faster there.
-3. Create the data folder yourself before the first Docker run. Otherwise Docker creates it owned by root and nothing can write to it.
-   ```bash
-   cd ~/tradequery
-   mkdir -p data
-   ```
-4. Run the tests and the demo. Neither needs MT5.
-   ```bash
-   make test
-   make demo
-   ```
+Windows with WSL2 (Ubuntu) and Docker (`docker compose version` must work in the WSL shell). Keep the clone in the WSL
+filesystem (for example `~/tradequery`), not under `/mnt/c`: Docker and Wine are much faster there.
 
-Every `make` target rebuilds its image first. The rebuild is cached, so it takes about a second when nothing changed, and code changes are never silently skipped.
+```bash
+make test      # 285 unit tests, inside Docker
+make sample    # store a synthetic sample account (48 made-up trades with planted patterns)
+make web       # http://localhost:8000: pick the account, click an example question
+```
 
-## Connect a live account
+To ask your own questions, add a free Gemini API key (Google AI Studio) to `.env` as `GEMINI_API_KEY=...`, then type in
+the page or run `make ask Q="What is my win rate?"`. Without a key the example questions still work.
+
+## Eval results (summary)
+
+80 questions with hand-written gold answers, 10 of them adversarial, scored on the sample account. Gemini 3.5
+Flash-Lite, free tier: **result match 91.4% on the first run (100% after prompt fixes), adversarial refusals 100%,
+number check 100%, 3.9 s and $0 per question.** Details and caveats: [Eval results](#eval-results).
+
+## Running on your own account
+
+Every `make` target rebuilds its image first (cached, about a second when nothing changed), so code changes are never
+silently skipped. `make` also creates `data/` as you, before Docker could create it owned by root.
+
+### Connect a live account
 
 ```bash
 cp .env.example .env      # fill in MT5_LOGIN, MT5_INVESTOR_PASSWORD, MT5_SERVER
@@ -57,7 +75,7 @@ docker compose run --rm app sequences # martingale and grid sequences: depth, lo
 - After the first sync, `make sync` re-reads only from a day before the newest stored deal and updates by ticket, so nothing duplicates. To re-read everything, run `docker compose run --rm mt5 download --full`.
 - Brokers keep a limited history. If it starts after the account opened, `sync` infers the opening balance (MT5 balance minus every stored deal) and says so.
 
-## Import a report (no terminal needed)
+### Import a report (no terminal needed)
 
 In the MT5 terminal: Toolbox → History → right-click → *All History* → *Report* → *HTML*. Save the file into `data/`, then:
 
@@ -67,7 +85,7 @@ make import FILE=data/ReportHistory-<login>.html
 
 The importer only accepts the report if every deal reproduces the report's own Balance column, so a misread number fails loudly. A report has no magic numbers and only partial close reasons. An import never overwrites deals already stored by a sync.
 
-## Cross-check a report against the sync
+### Cross-check a report against the sync
 
 ```bash
 docker compose run --rm app compare /data/ReportHistory-<login>.html
@@ -75,7 +93,7 @@ docker compose run --rm app compare /data/ReportHistory-<login>.html
 
 This compares every deal and every closed trade in the report's time span with the stored history, field by field. Both sources of the same account must agree.
 
-## News overlap
+### News overlap
 
 ```bash
 make news FROM=2026.08.01 TO=2026.10.31   # export the MT5 economic calendar and join it to the trades
@@ -141,7 +159,7 @@ Run 1 failures, and what changed before run 2:
 
 ## Asking questions (QuerySpec)
 
-The language model will never write SQL. It fills in a **QuerySpec**: a typed question (entity, filters, time range, group-by, aggregations, named metrics, comparisons, order, limit) that is checked against a whitelist and compiled to parameterized SQL. For now you can write specs yourself:
+The language model will never write SQL. It fills in a **QuerySpec**: a typed question (entity, filters, time range, group-by, aggregations, named metrics, comparisons, order, limit) that is checked against a whitelist and compiled to parameterized SQL. You can also write specs yourself:
 
 ```bash
 docker compose run --rm app query --examples all          # the build plan's example questions
@@ -210,8 +228,11 @@ src/tradequery/
   verify.py       number checker for the written answer
   api.py          the web API (FastAPI): accounts, ask with follow-up sessions, presets, specs
   web/index.html  the page: one file, no external libraries
+  evaluate.py     the eval suite: eval account, matching, scoring, reports
+  cli.py          every command (tradequery --help)
 mql5/             ExportCalendar.mq5: exports the MT5 economic calendar
-  cli.py          demo | inspect | download | import | compare | metrics | show
+evals/            questions.jsonl (80 questions with gold specs) and results/
+docs/             case-study.md, demo-script.md
 docker/mt5/       Wine image and its setup script
 tests/            unit tests (synthetic data and a made-up report; no real accounts)
 ```

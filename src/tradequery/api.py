@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from . import db
 from .ask import Answer, Session, ask, is_share_column
+from .evaluate import EVAL_LOGIN as SAMPLE_LOGIN
 from .examples import EXAMPLES
 from .execute import QueryTimeout, Result, execute
 from .llm import LLMError, Provider, provider_from_env
@@ -130,7 +131,8 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
     @app.get("/api/accounts")
     def accounts():
         out = []
-        for login in db.list_accounts(root):
+        # real accounts first; the synthetic sample account (make sample) last
+        for login in sorted(db.list_accounts(root), key=lambda n: (n == SAMPLE_LOGIN, n)):
             conn = db.connect(db.db_path(login, root), read_only=True)
             try:
                 account = db.load_account(conn)
