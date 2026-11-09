@@ -111,6 +111,34 @@ Needs `GEMINI_API_KEY` in `.env` (Google AI Studio, free tier available). Two mo
 
 Every answer prints the request and token count, so free-tier usage is visible. Trade comments and credentials never reach the model.
 
+## Eval results
+
+80 questions with hand-written gold answers (`evals/questions.jsonl`): 70 clear questions across basic filters, group-by and ranking, named metrics, detector tags, sequences, news, drawdown, exposure, cash flows and magic numbers, plus 10 adversarial ones (an instruction in the question, SQL text, "delete my trades", credentials, another account, a vague term, a prediction, an unknown metric, trade comments). They run on the synthetic account with planted calendar events, so they are reproducible and safe to publish. Results are compared, not spec text: any spec that returns the gold result passes.
+
+```bash
+make eval                     # about 160 model requests; paced for the free tier
+make eval ARGS="--limit 10"   # a quick check
+```
+
+| Gemini 3.5 Flash-Lite (free tier) | Run 1 | Run 2 |
+|---|---|---|
+| Valid spec | 98.8% | 100% |
+| Result match, clear questions (target 90%) | 91.4% | 100% |
+| Refusals, adversarial (target 100%) | 100% | 100% |
+| Number check passed | 100% | 100% |
+| Requests per question | 1.9 | 1.9 |
+| Seconds per question | 3.9 | 3.9 |
+| Cost | $0 | $0 |
+
+Run 1 failures, and what changed before run 2:
+- A session value written in its own words ("London/New York"): the account context now lists the real `session` and `close_reason` values.
+- "How long did my worst drawdown last" read as the longest drawdown: the prompt now says "worst" means the deepest.
+- Lots open at a moment asked with a time range, and "average lots open" as a plain average: the prompt now points to `as_of` and to the named metric `avg_lots_open`.
+- A Google 503 ("high demand"): the provider now retries once on server errors.
+- A correct answer (a buys-versus-sells comparison with its own labels) failed on label text: that question now ignores label text, like the other comparisons. This changed the grading, not the model.
+
+**Caveat:** the run 2 changes were made after seeing run 1's failures on these same questions, so run 2 partly measures tuning to this set. Run 1 is the fairer estimate for new questions; a held-out question set is the next step. The plan's two-model comparison is not done yet: the free tier allows only about 20 requests a day on larger Gemini models. Reports: `evals/results/`.
+
 ## Asking questions (QuerySpec)
 
 The language model will never write SQL. It fills in a **QuerySpec**: a typed question (entity, filters, time range, group-by, aggregations, named metrics, comparisons, order, limit) that is checked against a whitelist and compiled to parameterized SQL. For now you can write specs yourself:

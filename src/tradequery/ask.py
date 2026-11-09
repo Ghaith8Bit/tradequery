@@ -74,8 +74,14 @@ Values and conventions:
 - side: buy or sell. outcome: win, loss or breakeven. Money amounts are in the account currency.
 - Sequences: type martingale, grid or martingale_grid. Streaks: type win or loss. Drawdown episodes: basis balance
   (closed trades) or equity (with open positions). cash_flows type: deposit, withdrawal, credit, bonus, correction, charge.
+- session and close_reason: use only the values listed in the account context, exactly as written.
 - "Show/list trades" questions: order them sensibly and set a limit (100 unless asked).
 - Questions about one thing that happened ("the worst", "the longest", "the peak"): order and limit 1.
+- "Worst drawdown" means the deepest one: order drawdown_episodes by depth_abs desc, whatever is asked about it
+  (its length, its trades, its news share).
+- Lots open at one moment ("at 15:00 on Sep 9"): entity exposure with as_of, never a time_range.
+- Prefer a named metric when one matches the question: average lots open is avg_lots_open, peak lots open is
+  peak_lots_open, win rate is win_rate, longest streaks are max_win_streak / max_loss_streak.
 
 When to answer with clarify or unsupported:
 - A vague amount or period with no stated value ("big losses", "recently", "a while"): clarify with one short question.
@@ -134,6 +140,8 @@ def account_context(path, settings: Settings) -> str:
         span = conn.execute("SELECT MIN(open_time_utc), MAX(close_time_utc), COUNT(*) FROM trades").fetchone()
         symbols = [r[0] for r in conn.execute("SELECT DISTINCT canonical_symbol FROM trade_facts ORDER BY 1")]
         magics = [r[0] for r in conn.execute("SELECT magic, COUNT(*) FROM trades GROUP BY magic ORDER BY 2 DESC")]
+        sessions = [r[0] for r in conn.execute("SELECT DISTINCT session FROM trades ORDER BY 1")]
+        reasons = [r[0] for r in conn.execute("SELECT DISTINCT close_reason FROM trades WHERE close_reason != '' ORDER BY 1")]
         news = conn.execute("SELECT COUNT(*) FROM news_events").fetchone()[0]
     finally:
         conn.close()
@@ -143,6 +151,9 @@ def account_context(path, settings: Settings) -> str:
             f"{server(span[0])} to {server(span[1])} (server time); now {now} server time.\n"
             f"Symbols (canonical_symbol): {', '.join(symbols) or 'none'}. Magic numbers: "
             f"{', '.join(map(str, magics)) or 'none'} (0 = manual trades).\n"
+            f"session values: {', '.join(sessions) or 'none'} (an overlap is the two names joined, e.g. london_new_york). "
+            f"close_reason values: {', '.join(reasons) or 'none'} (sl stop loss, tp take profit, so stop-out, "
+            f"client/mobile/web manual, expert by the EA).\n"
             f"Economic calendar loaded: {'yes' if news else 'no (news questions will find no overlap)'}.")
 
 

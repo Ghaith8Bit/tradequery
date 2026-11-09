@@ -131,3 +131,38 @@ def test_shares_reach_the_model_as_percentages(path):
     ask("worst drawdown", path, SETTINGS, fake)
     table = fake.calls[1][1].split("Result table:")[1]
     assert "%" in table and "0.0" not in table.split(chr(10))[1].split(" | ")[5]  # depth_pct column as a percentage
+
+
+def test_account_context_lists_the_session_and_close_reason_values(path):
+    context = account_context(path, SETTINGS)
+    assert "session values: london, london_new_york, new_york" in context
+    assert "close_reason values: client, expert, sl, tp" in context
+
+
+def test_gemini_retries_once_on_a_temporary_server_error():
+    from types import SimpleNamespace
+    from google.genai import errors, types
+    from tradequery.llm import GeminiProvider
+
+    class FakeModels:
+        def __init__(self, failures):
+            self.failures, self.calls = failures, 0
+
+        def generate_content(self, **kwargs):
+            self.calls += 1
+            if self.failures:
+                code = self.failures.pop(0)
+                raise errors.ServerError(code, {"error": {"message": "high demand", "status": "UNAVAILABLE"}})
+            meta = SimpleNamespace(prompt_token_count=10, candidates_token_count=5, thoughts_token_count=0)
+            return SimpleNamespace(text="ok", usage_metadata=meta, prompt_feedback=None)
+
+    def provider(failures):
+        p = object.__new__(GeminiProvider)
+        p._types, p._errors, p.model, p._sleep = types, errors, "m", lambda s: None
+        p._client = SimpleNamespace(models=FakeModels(failures))
+        return p
+
+    once = provider([503])
+    assert once.generate("s", "p")[0] == "ok" and once._client.models.calls == 2
+    with pytest.raises(LLMError, match="503"):
+        provider([503, 503]).generate("s", "p")
