@@ -24,6 +24,18 @@ LONGEST_LOSING_STREAK = {
 }
 
 
+def with_drawdown_basis(spec: dict, basis: str) -> dict:
+    """A drawdown spec on another basis ("balance" or "equity"); other specs come back unchanged.
+
+    The presets are written on the balance basis, which every account has; an
+    account with price bars also has equity drawdowns, and those are its default.
+    """
+    if spec.get("entity") != "drawdown_episodes":
+        return spec
+    filters = [dict(f, value=basis) if f.get("field") == "basis" else f for f in spec.get("filters", [])]
+    return dict(spec, filters=filters)
+
+
 def trades_in(field: str, value: int) -> dict:
     """Follow-up: the trades of the drawdown episode, streak or sequence found by the first spec."""
     return {"entity": "trades", "filters": [{"field": field, "op": "eq", "value": value}],

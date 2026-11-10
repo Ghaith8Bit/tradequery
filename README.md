@@ -205,6 +205,7 @@ To look inside the Wine container, run `make shell-mt5`. `make clean-mt5` delete
 - The report importer is built for hedging accounts, where a position's id is its opening order's ticket.
 - Balance drawdown covers closed trades only. Equity drawdown, MAE and MFE come from one-minute bars and are approximate: a bar holds the minute's high and low but not their order. A conservative "worst case within the minute" bound is shown next to equity drawdown.
 - Drawdown percentages are of the money at stake: the balance or equity at the peak plus deposits made before the trough.
+- A plain "drawdown" question means equity drawdown (open positions counted) when the account has price bars, and balance drawdown otherwise. Ask for "balance drawdown" to get closed trades only. After an upgrade, `docker compose run --rm app rebuild` refreshes the stored drawdowns and trade links.
 - `make sync` also stores one-minute bars for the windows in which positions were open (only new windows on later runs; `--no-bars` skips them).
 
 ## Layout

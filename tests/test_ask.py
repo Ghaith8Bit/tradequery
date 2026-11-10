@@ -110,6 +110,7 @@ def test_the_model_never_sees_trade_comments(path):
 def test_account_context_lists_symbols_and_magic_numbers(path):
     context = account_context(path, SETTINGS)
     assert "XAUUSD" in context and "12345" in context and "currency USD" in context
+    assert "Drawdown default: balance" in context  # the synthetic account has no price bars
 
 
 def test_json_is_found_inside_code_fences_and_chatter():
@@ -166,3 +167,46 @@ def test_gemini_retries_once_on_a_temporary_server_error():
     assert once.generate("s", "p")[0] == "ok" and once._client.models.calls == 2
     with pytest.raises(LLMError, match="503"):
         provider([503, 503]).generate("s", "p")
+
+
+def test_drawdown_default_follows_the_account():
+    import sqlite3
+
+    from tradequery.ask import SPEC_SYSTEM, _example_question, drawdown_default
+    from tradequery.examples import WORST_DRAWDOWN, with_drawdown_basis
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE drawdown_episodes (basis TEXT)")
+    conn.execute("INSERT INTO drawdown_episodes VALUES ('balance')")
+    assert drawdown_default(conn) == "balance"  # no price bars, no equity drawdowns
+    conn.execute("INSERT INTO drawdown_episodes VALUES ('equity')")
+    assert drawdown_default(conn) == "equity"
+
+    equity = with_drawdown_basis(WORST_DRAWDOWN, "equity")
+    assert equity["filters"] == [{"field": "basis", "op": "eq", "value": "equity"}]
+    assert WORST_DRAWDOWN["filters"][0]["value"] == "balance"  # the preset itself is unchanged
+    assert with_drawdown_basis({"entity": "trades"}, "equity") == {"entity": "trades"}
+
+    # worked examples name their basis, so the model follows the account's default instead
+    assert _example_question("What was my worst drawdown period?", WORST_DRAWDOWN) == \
+        "What was my worst balance drawdown period?"
+    assert "Q: What was my worst balance drawdown period" in SPEC_SYSTEM
+    assert "Drawdown default" in SPEC_SYSTEM and "equity_drawdown_episode_id" in SPEC_SYSTEM
+
+
+def test_follow_ups_see_the_ids_the_last_answer_found():
+    from tradequery.ask import _found_ids, _spec_prompt
+    from tradequery.execute import Result
+
+    result = Result("query", columns=["episode_id", "basis", "depth_abs"], rows=[[72, "equity", 12980.45]],
+                    truncated=False, interpretation="", notes=[], sql="")
+    found = _found_ids(result)
+    assert found == "episode_id 72; basis equity"  # ids only, never amounts or trade details
+    session = Session(question="What was my worst drawdown?", spec={"entity": "drawdown_episodes"}, found=found)
+    prompt = _spec_prompt("Which trades were in it?", "context", session)
+    assert "Previous result: episode_id 72; basis equity" in prompt
+    many = Result("query", columns=["sequence_id"], rows=[[i] for i in range(8)], truncated=False, interpretation="",
+                  notes=[], sql="")
+    assert _found_ids(many).endswith("(and 3 more rows)")
+    assert _found_ids(Result("query", columns=["net"], rows=[[1.0]], truncated=False, interpretation="", notes=[],
+                             sql="")) is None
