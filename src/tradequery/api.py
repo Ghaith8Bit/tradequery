@@ -33,9 +33,9 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from . import db, syncjobs
-from .ask import Answer, Session, ask, is_share_column
+from .ask import Answer, Session, ask, drawdown_default, is_share_column
 from .evaluate import EVAL_LOGIN as SAMPLE_LOGIN
-from .examples import EXAMPLES
+from .examples import EXAMPLES, with_drawdown_basis
 from .execute import QueryTimeout, Result, execute
 from .importers.mt5_report import ReportError
 from .ingest import import_report
@@ -256,7 +256,12 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
         if body.number > len(EXAMPLES):
             raise HTTPException(404, f"there are {len(EXAMPLES)} presets")
         question, spec = EXAMPLES[body.number - 1]
-        return run_spec(body.login, spec, question)
+        conn = db.connect(account_path(body.login), read_only=True)
+        try:
+            basis = drawdown_default(conn)
+        finally:
+            conn.close()
+        return run_spec(body.login, with_drawdown_basis(spec, basis), question)
 
     @app.post("/api/query")
     def query(body: QueryBody):

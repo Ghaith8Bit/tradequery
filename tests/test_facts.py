@@ -49,6 +49,36 @@ def test_facts_agree_with_the_computing_modules(tmp_path):
     conn.close()
 
 
+def test_trades_link_to_their_equity_drawdown(tmp_path):
+    from datetime import timedelta
+
+    from tradequery.models import Bar
+
+    deals = generate_account().deals
+    conn = db.connect(db.db_path(2, tmp_path))
+    with conn:
+        db.upsert_deals(conn, deals)
+        trades, _ = db.rebuild_derived(conn, load_settings())
+        # price bars along each trade, open price to close price, so there is an equity curve
+        bars = {}
+        for t in trades:
+            minutes = max(1, int((t.close_time_utc - t.open_time_utc).total_seconds() // 60))
+            start = t.open_time_utc.replace(second=0, microsecond=0)
+            for i in range(minutes + 1):
+                p = round(t.open_price + (t.close_price - t.open_price) * i / minutes, 5)
+                bars.setdefault((t.symbol, start + timedelta(minutes=i)), Bar(t.symbol, start + timedelta(minutes=i),
+                                                                               p, p, p, p, 0))
+        db.save_bars(conn, list(bars.values()))
+        db.rebuild_derived(conn, load_settings())
+    episodes = conn.execute("SELECT episode_id, trade_count FROM drawdown_episodes WHERE basis = 'equity'").fetchall()
+    assert episodes
+    for episode_id, trade_count in episodes:
+        linked = conn.execute("SELECT COUNT(*) FROM v_trades WHERE equity_drawdown_episode_id = ?",
+                              (episode_id,)).fetchone()[0]
+        assert linked == trade_count
+    conn.close()
+
+
 def test_views_answer_simple_questions(tmp_path):
     conn, trades, _ = stored(tmp_path)
     months = conn.execute("SELECT month, type, SUM(amount) FROM v_cash_flows GROUP BY month, type").fetchall()

@@ -51,6 +51,7 @@ class TradeFact:
     streak_id: int | None
     drawdown_episode_id: int | None  # the closed-trade drawdown it fell in, peak to trough
     news_overlap: bool
+    equity_drawdown_episode_id: int | None = None  # the equity drawdown it closed in, peak to trough
 
 
 @dataclass(frozen=True)
@@ -152,7 +153,16 @@ def build(
         deepest = sorted((e for e in pricepath.equity_drawdowns(curve, cash_flows) if e.depth > 0),
                          key=lambda e: -e.depth)[:EQUITY_EPISODES_KEPT]
         deepest.sort(key=lambda e: e.trough_time)
-        episodes += _episode_rows(deepest, "equity", len(episodes) + 1, trades, by_pid, links, first_time, last_time)
+        equity_rows = _episode_rows(deepest, "equity", len(episodes) + 1, trades, by_pid, links, first_time, last_time)
+        episodes += equity_rows
+    else:
+        equity_rows = []
+    # the same members _episode_rows counts: trades closed after the peak, up to the trough
+    equity_of = {}
+    for row in equity_rows:
+        for t in trades:
+            if (row.peak_time_utc is None or t.close_time_utc > row.peak_time_utc) and t.close_time_utc <= row.trough_time_utc:
+                equity_of.setdefault(t.position_id, row.episode_id)
 
     facts = []
     for t in trades:
@@ -174,5 +184,6 @@ def build(
             streak_id=streak_of.get(t.position_id),
             drawdown_episode_id=episode_of.get(t.position_id),
             news_overlap=t.position_id in news_hit,
+            equity_drawdown_episode_id=equity_of.get(t.position_id),
         ))
     return Facts(facts, streak_rows, episodes, exposure_mod.exposure_events(trades), curve)

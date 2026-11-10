@@ -2,6 +2,7 @@
 
   tradequery demo        print a synthetic account (no MT5, no credentials)
   tradequery sample      store the synthetic sample account, to try the page and questions
+  tradequery rebuild     recompute the derived tables of stored accounts (after an upgrade)
   tradequery inspect     log in to MT5; show account, symbols, history summary
   tradequery download    save account, deals and symbol specs to data/accounts/<login>.db
   tradequery import FILE load an MT5 HTML history report into data/accounts/<login>.db
@@ -780,6 +781,21 @@ def cmd_sample(args) -> int:
     return 0
 
 
+def cmd_rebuild(args) -> int:
+    """Recompute every derived table from the stored deals, for each account (after an upgrade)."""
+    root = args.data_dir or data_dir()
+    settings = load_settings()
+    for login in ([args.login] if args.login else db.list_accounts(root)):
+        conn = db.connect(db.db_path(login, root))
+        try:
+            with conn:
+                trades, _ = db.rebuild_derived(conn, settings)
+        finally:
+            conn.close()
+        print(f"Rebuilt account {login}: {len(trades)} closed trades")
+    return 0
+
+
 def cmd_serve(args) -> int:
     from .api import serve
 
@@ -932,6 +948,9 @@ def main(argv=None) -> int:
     ev.set_defaults(func=cmd_eval)
     sm = sub.add_parser("sample", help="store the synthetic sample account (no MT5 needed)")
     sm.set_defaults(func=cmd_sample)
+    rb = sub.add_parser("rebuild", help="recompute the derived tables of stored accounts (after an upgrade)")
+    rb.add_argument("--login", type=int, help="only this account (default: all)")
+    rb.set_defaults(func=cmd_rebuild)
     sv = sub.add_parser("serve", help="run the web page and API")
     sv.add_argument("--host", default="0.0.0.0", help="address to listen on (inside Docker: all)")
     sv.add_argument("--port", type=int, default=8000)

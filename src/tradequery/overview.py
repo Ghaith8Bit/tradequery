@@ -37,6 +37,8 @@ def build_overview(path: Path, settings: Settings) -> dict:
         ).fetchone()
         deep_count = conn.execute("SELECT COUNT(*), SUM(is_win) FROM sequences WHERE depth >= 6").fetchone()
         no_stop = conn.execute("SELECT COUNT(*) FROM tags WHERE rule = 'no_stop_loss'").fetchone()[0]
+        equity_dd = conn.execute("SELECT depth_abs, depth_pct FROM drawdown_episodes WHERE basis = 'equity' "
+                                 "ORDER BY depth_abs DESC LIMIT 1").fetchone()
     finally:
         conn.close()
 
@@ -55,6 +57,9 @@ def build_overview(path: Path, settings: Settings) -> dict:
     out["stats"] = {
         "net_profit": m["net_profit"], "win_rate": m["win_rate"], "profit_factor": m["profit_factor"],
         "max_drawdown": m["max_drawdown"], "max_drawdown_pct": m["max_drawdown_pct"],
+        # with price bars, the equity drawdown (open positions counted) is the one shown first
+        "equity_drawdown": equity_dd[0] if equity_dd else None,
+        "equity_drawdown_pct": equity_dd[1] if equity_dd else None,
         "deposits": m["total_deposits"], "withdrawals": m["total_withdrawals"],
         "deepest_sequence": ({"depth": deepest[0], "multiplier": deepest[1], "net": deepest[2], "start": deepest[3],
                                   "id": deepest[4]}
@@ -78,8 +83,11 @@ def build_overview(path: Path, settings: Settings) -> dict:
         won = deep_count[1] or 0
         facts.append({"level": "warn", "text": f"{deep_count[0]} martingale or grid sequences went 6 or more levels "
                                                f"deep; {won} of them closed in profit."})
-    if m["max_drawdown_pct"] is not None and m["max_drawdown_pct"] >= 0.5:
-        facts.append({"level": "warn", "text": f"The deepest drawdown took {m['max_drawdown_pct'] * 100:.1f}% of the "
-                                               "money at stake."})
+    if equity_dd and equity_dd[1] is not None and equity_dd[1] >= 0.5:
+        facts.append({"level": "warn", "text": f"The deepest equity drawdown (open positions counted) took "
+                                               f"{equity_dd[1] * 100:.1f}% of the money at stake."})
+    elif not equity_dd and m["max_drawdown_pct"] is not None and m["max_drawdown_pct"] >= 0.5:
+        facts.append({"level": "warn", "text": f"The deepest balance drawdown took {m['max_drawdown_pct'] * 100:.1f}% "
+                                               "of the money at stake."})
     out["facts"] = facts
     return out

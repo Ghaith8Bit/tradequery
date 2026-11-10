@@ -40,6 +40,14 @@ def _schema_text() -> str:
     return "\n".join(lines)
 
 
+def _example_question(question: str, spec: dict) -> str:
+    """A worked example names its drawdown basis, so the model follows the account's default, not the example."""
+    basis = next((f.get("value") for f in spec.get("filters", []) if f.get("field") == "basis"), None)
+    if basis and "drawdown" in question and basis not in question:
+        return question.replace("drawdown", f"{basis} drawdown", 1)
+    return question
+
+
 SPEC_SYSTEM = f"""You turn a trader's question about their own MT5 trading account into a QuerySpec: one JSON object.
 You never write SQL and never calculate numbers yourself; code runs the spec and computes everything.
 
@@ -74,6 +82,13 @@ Values and conventions:
 - side: buy or sell. outcome: win, loss or breakeven. Money amounts are in the account currency.
 - Sequences: type martingale, grid or martingale_grid. Streaks: type win or loss. Drawdown episodes: basis balance
   (closed trades) or equity (with open positions). cash_flows type: deposit, withdrawal, credit, bonus, correction, charge.
+- Drawdown basis: when a question does not say balance or equity, use the "Drawdown default" from the account
+  context. On an equity account, "maximum drawdown" is the deepest equity episode (drawdown_episodes, basis
+  equity, order depth_abs desc, limit 1), not the max_drawdown metric, which counts closed trades only.
+- Trades in a drawdown episode: filter trades by drawdown_episode_id for a balance episode and by
+  equity_drawdown_episode_id for an equity one.
+- When you choose fields for drawdown_episodes, sequences or streaks, keep their id field (episode_id,
+  sequence_id, streak_id), so a follow-up can ask about the trades in them.
 - session and close_reason: use only the values listed in the account context, exactly as written.
 - "Show/list trades" questions: order them sensibly and set a limit (100 unless asked).
 - Questions about one thing that happened ("the worst", "the longest", "the peak"): order and limit 1.
@@ -91,12 +106,13 @@ When to answer with clarify or unsupported:
   SQL, answer unsupported.
 
 Follow-ups: when a previous question and spec are given and the new question only refines them ("only gold",
-"just September", "and by weekday?"), return the previous spec with that change.
+"just September", "and by weekday?"), return the previous spec with that change. A follow-up about what the
+previous answer found ("which trades were in it?") uses the ids listed under "Previous result".
 
 Reply with the JSON object only.
 
 Worked examples:
-{chr(10).join(f"Q: {q}{chr(10)}{json.dumps(s)}" for q, s in EXAMPLES)}
+{chr(10).join(f"Q: {_example_question(q, s)}{chr(10)}{json.dumps(s)}" for q, s in EXAMPLES)}
 """
 
 
@@ -118,6 +134,7 @@ class Session:
     question: str | None = None
     spec: dict | None = None
     login: int | None = None  # the account the conversation is about (the web API never crosses accounts)
+    found: str | None = None  # ids in the last result, so "which trades were in it?" can name the right one
 
 
 @dataclass
@@ -143,6 +160,7 @@ def account_context(path, settings: Settings) -> str:
         sessions = [r[0] for r in conn.execute("SELECT DISTINCT session FROM trades ORDER BY 1")]
         reasons = [r[0] for r in conn.execute("SELECT DISTINCT close_reason FROM trades WHERE close_reason != '' ORDER BY 1")]
         news = conn.execute("SELECT COUNT(*) FROM news_events").fetchone()[0]
+        equity = drawdown_default(conn) == "equity"
     finally:
         conn.close()
     server = lambda t: settings.clock.from_utc(db.parse_time(t)).strftime("%Y-%m-%d %H:%M") if t else "?"  # noqa: E731
@@ -154,7 +172,15 @@ def account_context(path, settings: Settings) -> str:
             f"session values: {', '.join(sessions) or 'none'} (an overlap is the two names joined, e.g. london_new_york). "
             f"close_reason values: {', '.join(reasons) or 'none'} (sl stop loss, tp take profit, so stop-out, "
             f"client/mobile/web manual, expert by the EA).\n"
-            f"Economic calendar loaded: {'yes' if news else 'no (news questions will find no overlap)'}.")
+            f"Economic calendar loaded: {'yes' if news else 'no (news questions will find no overlap)'}.\n"
+            f"Drawdown default: " + ("equity (open positions counted; balance drawdowns are there too)." if equity
+                                     else "balance (no price bars are stored, so there are no equity drawdowns)."))
+
+
+def drawdown_default(conn) -> str:
+    """The basis a plain "drawdown" means: equity when the account has equity drawdowns (needs price bars)."""
+    has_equity = conn.execute("SELECT 1 FROM drawdown_episodes WHERE basis = 'equity' LIMIT 1").fetchone()
+    return "equity" if has_equity else "balance"
 
 
 def _json_object(text: str) -> str:
@@ -167,10 +193,25 @@ def _json_object(text: str) -> str:
     return text[start:end + 1] if start != -1 and end > start else text
 
 
+FOUND_ROWS = 5
+
+
+def _found_ids(result: Result) -> str | None:
+    """The ids (and drawdown basis) of the first rows of a result: only ids, never trade details or comments."""
+    keep = [i for i, c in enumerate(result.columns) if c.endswith("_id") or c == "basis"]
+    if not keep or not result.rows:
+        return None
+    rows = ["; ".join(f"{result.columns[i]} {row[i]}" for i in keep) for row in result.rows[:FOUND_ROWS]]
+    more = f" (and {len(result.rows) - FOUND_ROWS} more rows)" if len(result.rows) > FOUND_ROWS else ""
+    return " | ".join(rows) + more
+
+
 def _spec_prompt(question: str, context: str, session: Session | None) -> str:
     parts = [context]
     if session and session.spec:
         parts.append(f"Previous question: {session.question}\nPrevious spec: {json.dumps(session.spec)}")
+        if session.found:
+            parts.append(f"Previous result: {session.found}")
     parts.append(f"Question: {question}")
     return "\n\n".join(parts)
 
@@ -246,6 +287,7 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
         return answer
     if session is not None:
         session.question, session.spec = question, answer.spec.model_dump(mode="json", exclude_defaults=True)
+        session.found = _found_ids(answer.result)
 
     # Call 2: result -> short answer, every number checked, one retry
     result = answer.result

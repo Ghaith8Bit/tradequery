@@ -33,7 +33,7 @@ from .models import TRADE_TYPES, Bar, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SQL_TYPES = {"int": "INTEGER", "float": "REAL", "str": "TEXT", "datetime": "TEXT", "bool": "INTEGER"}
 
@@ -208,6 +208,16 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE VIEW v_sequences AS SELECT s.*, EXISTS (SELECT 1 FROM sequence_trades st JOIN trade_news n "
         "ON n.position_id = st.position_id WHERE st.sequence_id = s.sequence_id) AS news_overlap FROM sequences s",
         "CREATE VIEW v_cash_flows AS SELECT c.*, substr(c.time_utc, 1, 7) AS month FROM cash_flows c",
+    ),
+    7: (
+        # Trades also link to the equity drawdown they closed in (peak to trough), so "which trades were in
+        # my worst equity drawdown" can be answered. Filled by the next sync or import, or `tradequery rebuild`.
+        "ALTER TABLE trade_facts ADD COLUMN equity_drawdown_episode_id INTEGER",
+        "DROP VIEW v_trades",
+        "CREATE VIEW v_trades AS SELECT t.*, f.canonical_symbol, f.month, f.mae, f.mfe, f.minutes_in_profit, "
+        "f.minutes_in_loss, f.spread_at_open, f.risk_amount, f.planned_rr, f.r_multiple, f.sequence_id, "
+        "f.streak_id, f.drawdown_episode_id, f.equity_drawdown_episode_id, COALESCE(f.news_overlap, 0) AS news_overlap "
+        "FROM trades t LEFT JOIN trade_facts f ON f.position_id = t.position_id",
     ),
 }
 
@@ -471,10 +481,12 @@ def save_facts(conn: sqlite3.Connection, built) -> None:
         conn.execute(f"DELETE FROM {table}")
     t = lambda v: format_time(v) if v else None  # noqa: E731
     conn.executemany(
-        "INSERT INTO trade_facts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO trade_facts (position_id, canonical_symbol, month, mae, mfe, minutes_in_profit, minutes_in_loss, "
+        "spread_at_open, risk_amount, planned_rr, r_multiple, sequence_id, streak_id, drawdown_episode_id, "
+        "news_overlap, equity_drawdown_episode_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [(f.position_id, f.canonical_symbol, f.month, f.mae, f.mfe, f.minutes_in_profit, f.minutes_in_loss,
           f.spread_at_open, f.risk_amount, f.planned_rr, f.r_multiple, f.sequence_id, f.streak_id,
-          f.drawdown_episode_id, int(f.news_overlap)) for f in built.trade_facts],
+          f.drawdown_episode_id, int(f.news_overlap), f.equity_drawdown_episode_id) for f in built.trade_facts],
     )
     conn.executemany("INSERT INTO streaks VALUES (?, ?, ?, ?, ?, ?)",
                      [(s.streak_id, s.type, s.length, t(s.start_utc), t(s.end_utc), s.net_pnl) for s in built.streaks])

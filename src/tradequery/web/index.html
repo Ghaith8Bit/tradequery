@@ -542,8 +542,13 @@ function renderOverview(container) {
     tiles.appendChild(tile("Net result", `${money(s.net_profit)} ${cur}`, "closed trades", s.net_profit < 0 ? "neg" : "pos"));
     tiles.appendChild(tile("Win rate", pct(s.win_rate), s.profit_factor ? `profit factor ${s.profit_factor.toFixed(2)}` : ""));
     tiles.appendChild(tile("Balance", `${money(o.balance)} ${cur}`, `deposits ${money(s.deposits)}`));
-    tiles.appendChild(tile("Worst drawdown", `${money(s.max_drawdown)}`, pct(s.max_drawdown_pct) + " of the money at stake",
-      s.max_drawdown_pct >= 0.5 ? "neg" : ""));
+    if (s.equity_drawdown !== null && s.equity_drawdown !== undefined) {
+      tiles.appendChild(tile("Worst drawdown (equity)", money(s.equity_drawdown),
+        `${pct(s.equity_drawdown_pct)} of the money at stake · closed trades only: ${money(s.max_drawdown)}`, s.equity_drawdown_pct >= 0.5 ? "neg" : ""));
+    } else {
+      tiles.appendChild(tile("Worst drawdown (balance)", money(s.max_drawdown), pct(s.max_drawdown_pct) + " of the money at stake",
+        s.max_drawdown_pct >= 0.5 ? "neg" : ""));
+    }
     const deep = s.deepest_sequence;
     const deepTile = tile("Deepest sequence", deep ? `${deep.depth} levels` : "none",
       deep ? `${deep.multiplier}× lots · net ${money(deep.net)} · tap for the chart` : "no martingale or grid",
