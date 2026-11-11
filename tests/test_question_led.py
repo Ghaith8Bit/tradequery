@@ -128,3 +128,14 @@ def test_equity_over_time_can_be_asked(root):
     assert template_answer(lowest, execute(lowest, path, SETTINGS)) == "In that period: lowest equity 350.00."
     latest = parse_spec({"entity": "equity_curve", "order_by": [{"field": "time_utc", "direction": "desc"}], "limit": 1})
     assert execute(latest, path, SETTINGS).rows[0][-1] == 600.0
+
+
+def test_a_zero_length_range_on_exposure_means_one_moment():
+    from tradequery.spec import parse_spec
+
+    spec = parse_spec({"entity": "exposure", "fields": ["gross_lots"],
+                       "time_range": {"start": "2026-09-09T15:00:00", "end": "2026-09-09T15:00:00"}})
+    assert spec.time_range is None and spec.as_of.isoformat() == "2026-09-09T15:00:00"
+    whole_day = parse_spec({"entity": "exposure", "fields": ["gross_lots"],
+                            "time_range": {"start": "2026-09-09", "end": "2026-09-09"}})
+    assert whole_day.as_of is None and whole_day.time_range is not None  # a whole day stays a range

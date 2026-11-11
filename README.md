@@ -47,9 +47,9 @@ the page or run `make ask Q="What is my win rate?"`. Without a key the example q
 
 ## Eval results (summary)
 
-80 questions with hand-written gold answers, 10 of them adversarial, scored on the sample account, plus a held-out set of 44 written after tuning (97.4% result match on its first run). Gemini 3.5
-Flash-Lite, free tier: **result match 91.4% on the first run (100% after prompt fixes), adversarial refusals 100%,
-number check 100%, 1.2 model requests and $0 per question.** Details and caveats: [Eval results](#eval-results).
+81 questions with hand-written gold answers, 10 of them adversarial, scored on the sample account, plus a held-out set of 43 written after tuning (97.4% result match on its first run, 100% on its latest). Gemini 3.5
+Flash-Lite, free tier: **result match 91.4% on the first run, 98.6% on the latest, adversarial refusals 100%,
+number check 100%, 1.1 model requests and $0 per question.** Details and caveats: [Eval results](#eval-results).
 
 ## Running on your own account
 
@@ -169,15 +169,15 @@ make eval ARGS="--limit 10"   # a quick check
 make eval-heldout             # 43 held-out questions, never used to tune the prompt
 ```
 
-| Gemini 3.5 Flash-Lite (free tier) | Run 1 | Run 2 | Run 3 (cost cuts) |
-|---|---|---|---|
-| Valid spec | 98.8% | 100% | 100% |
-| Result match, clear questions (target 90%) | 91.4% | 100% | 100% |
-| Refusals, adversarial (target 100%) | 100% | 100% | 100% |
-| Number check passed | 100% | 100% | 100% |
-| Requests per question | 1.9 | 1.9 | 1.2 |
-| Seconds per question | 3.9 | 3.9 | 10.9 |
-| Cost | $0 | $0 | $0 |
+| Gemini 3.5 Flash-Lite (free tier) | Run 1 | Run 2 | Run 3 (cost cuts) | Run 4 (live answers) | Run 5 |
+|---|---|---|---|---|---|
+| Valid spec | 98.8% | 100% | 100% | 100% | 100% |
+| Result match, clear questions (target 90%) | 91.4% | 100% | 100% | 97.2% | 98.6% |
+| Refusals, adversarial (target 100%) | 100% | 100% | 100% | 90% | 100% |
+| Number check passed | 100% | 100% | 100% | 98.6% | 100% |
+| Requests per question | 1.9 | 1.9 | 1.2 | 1.2 | 1.1 |
+| Seconds per question | 3.9 | 3.9 | 10.9 | 3.1 | 2.1 |
+| Cost | $0 | $0 | $0 | $0 | $0 |
 
 Run 1 failures, and what changed before run 2:
 - A session value written in its own words ("London/New York"): the account context now lists the real `session` and `close_reason` values.
@@ -187,6 +187,14 @@ Run 1 failures, and what changed before run 2:
 - A correct answer (a buys-versus-sells comparison with its own labels) failed on label text: that question now ignores label text, like the other comparisons. This changed the grading, not the model.
 
 Run 3 adds template answers (most simple answers need one model call instead of two), the daily budget, and a total on the Rows line for grouped tables, so the model no longer adds group counts up itself (which the number checker had rightly rejected). Its seconds per question are higher because Google returned many 503 "high demand" errors that day and the run waited on retries. A try with only the 5 closest examples in the prompt dropped result match to 94.3%, so it was dropped.
+
+Run 4 was the first after answers began to lead with what was asked, explain deposits in drawdowns, stream, and offer smart mode (81 questions). Its misses, and the fixes before run 5:
+- "Lots open at 15:00" sent as a range from 15:00 to 15:00: the spec now treats a zero-length range on `exposure` as that moment (code, not prompt).
+- "The most positions open at once" answered with peak lots: the prompt now separates `positions_open` (a count) from `peak_lots_open`.
+- "Show me the trades of account 12345678" answered about the selected account: a question naming an account number is now refused.
+- Between runs, "trades that were part of a martingale" was once filtered as "in any basket": the prompt now points to the `martingale` tag.
+
+Run 5's one miss averaged the rows of the exposure table for "on average, how many lots do I have open" (run 1 made the same slip). The prompt now says why that is wrong and points to `avg_lots_open`; the question passed on a retest, but a full run 6 is still to come.
 
 **Held-out set.** `evals/heldout.jsonl` was written after all prompt tuning: 44 new questions (38 clear, 6 adversarial) in new wording, including baskets and streaks, each gold answer checked to return real data on the eval account. First and only scored run (Gemini 3.5 Flash-Lite, 2026-11-11):
 
@@ -198,7 +206,7 @@ Run 3 adds template answers (most simple answers need one model call instead of 
 | Number check passed | 100% |
 | Requests / tokens per question | 1.1 / 4,487 |
 
-The one miss ("What was the total lot size of my biggest basket?") was the app's fault, not the model's: the spec was right, but a list sorted by a column did not show that column. The code now always shows it, and the question moved to the tuned set (`seq-07`), so the held-out set has 43 questions for its next run. Report: `evals/results/heldout/`.
+The one miss ("What was the total lot size of my biggest basket?") was the app's fault, not the model's: the spec was right, but a list sorted by a column did not show that column. The code now always shows it, and the question moved to the tuned set (`seq-07`), so the held-out set has 43 questions for its next run. Its latest run, with all the changes above: 100% result match (37/37), 100% refusals (6/6), 100% number check, 1.1 requests per question. Reports: `evals/results/heldout/`.
 
 **Caveat:** the run 2 changes were made after seeing run 1's failures on these same questions, so run 2 partly measures tuning to this set. Run 1 is the fairer estimate for new questions; the held-out set below is the honest one. The plan's two-model comparison is not done yet: the free tier allows only about 20 requests a day on larger Gemini models. Reports: `evals/results/`.
 

@@ -197,6 +197,11 @@ class QuerySpec(BaseModel):
             return self
         if self.entity is None:
             raise ValueError("a query needs an entity")
+        # "lots open at 15:00" sometimes arrives as a range from 15:00 to 15:00: that is one moment
+        tr = self.time_range
+        if (self.entity == "exposure" and self.as_of is None and tr is not None and tr.timezone == "server"
+                and isinstance(tr.start, datetime) and tr.start == tr.end):
+            self.as_of, self.time_range = tr.start, None
         ent = ENTITIES[self.entity]
         known = ", ".join(sorted(ent.fields))
 
@@ -271,7 +276,8 @@ def _check_filter(f: Filter, kind: str) -> None:
         raise ValueError(f"filters: in needs 1 to 50 values for {f.field!r}")
     for v in values:
         if kind in ("num", "int") and (isinstance(v, bool) or not isinstance(v, (int, float))):
-            raise ValueError(f"filters: {f.field!r} needs a number, got {v!r}")
+            hint = " (there is no null test: for trades in any basket use sequence_id gt 0)" if v is None else ""
+            raise ValueError(f"filters: {f.field!r} needs a number, got {v!r}{hint}")
         if kind == "text" and not isinstance(v, str):
             raise ValueError(f"filters: {f.field!r} needs text, got {v!r}")
         if kind == "bool" and not isinstance(v, bool):

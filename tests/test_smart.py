@@ -63,9 +63,9 @@ def test_smart_numbers_are_still_checked(root):
 
 
 def test_a_broken_plan_still_answers(root):
-    fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK), "no json here", TEXT])
+    fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK), "no json here", "still no json", TEXT])
     answer = ask("longest losing streak", db.db_path(1001, root), SETTINGS, fake, smart=True)
-    assert answer.verified and answer.checks == [] and len(answer.ideas) == 2
+    assert answer.verified and answer.checks == [] and len(answer.ideas) == 2 and answer.usage.requests == 4
 
 
 def test_the_planner_never_sees_the_account_number(tmp_path):
@@ -109,3 +109,44 @@ def test_normal_mode_is_unchanged(root):
     fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK)])  # template answer: one call, no plan
     answer = ask("longest losing streak", db.db_path(1001, root), SETTINGS, fake)
     assert answer.text_source == "template" and answer.checks == [] and answer.ideas == []
+
+
+def test_smart_text_that_fails_twice_falls_back_to_the_plain_sentence(root):
+    fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK), plan({"purpose": "Recent trades", "spec": CHECK}),
+                         "It lost 987654.25.", "It lost 987654.25 again."])
+    answer = ask("longest losing streak", db.db_path(1001, root), SETTINGS, fake, smart=True)
+    assert answer.verified and answer.text_source == "template" and answer.checks and not answer.unsupported_numbers
+
+
+def test_times_lose_their_seconds():
+    from tradequery.ask import plain_words
+
+    assert plain_words("from 2026-09-14 11:21:00 to 2026-09-14T16:51:30") == "from 2026-09-14 11:21 to 2026-09-14T16:51"
+
+
+def test_a_plan_with_no_usable_check_gets_one_more_try(root):
+    seen = []
+
+    class Spy(FakeProvider):
+        def generate(self, system, prompt, *, json_mode=False):
+            seen.append(prompt)
+            return super().generate(system, prompt, json_mode=json_mode)
+
+    fake = Spy([json.dumps(LONGEST_LOSING_STREAK), plan({"purpose": "Bad", "spec": {"entity": "passwords"}}),
+                plan({"purpose": "Recent trades", "spec": CHECK}), TEXT])
+    answer = ask("longest losing streak", db.db_path(1001, root), SETTINGS, fake, smart=True)
+    assert "Every check you planned was rejected" in seen[2] and [p for p, _, _ in answer.checks] == ["Recent trades"]
+    assert answer.usage.requests == 4
+
+
+def test_no_checks_means_no_why(root):
+    seen = []
+
+    class Spy(FakeProvider):
+        def generate(self, system, prompt, *, json_mode=False):
+            seen.append(prompt)
+            return super().generate(system, prompt, json_mode=json_mode)
+
+    fake = Spy([json.dumps(LONGEST_LOSING_STREAK), plan(), TEXT])  # an empty plan is not retried
+    ask("longest losing streak", db.db_path(1001, root), SETTINGS, fake, smart=True)
+    assert len(seen) == 3 and "leave out the Why paragraph" in seen[2]
