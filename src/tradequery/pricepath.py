@@ -303,3 +303,76 @@ def compute_price_path_metrics(
         "max_equity_drawdown_episode": close_dd,
         "worst_floating_pnl": (worst_floating.floating, worst_floating.time_utc) if worst_floating and worst_floating.floating < 0 else None,
     }
+
+
+# ---------------------------------------------------------------- baskets
+
+
+@dataclass(frozen=True)
+class BasketDrawdown:
+    """How far one basket (martingale/grid sequence) went into the red before it closed.
+
+    The basket's running result at each minute's close is the net of its legs
+    already closed plus the floating P&L of its legs still open (bar closes).
+    """
+
+    sequence_id: int
+    depth_abs: float  # how far below zero the running result went (0 if it never did)
+    depth_pct: float | None  # that, as a share of account equity when the basket opened
+    time_utc: datetime | None  # the minute it was deepest
+    equity_at_start: float | None
+
+
+def equity_at(when: datetime, trades: list[Trade], cash_flows: list[CashFlow], curve: list[EquityPoint],
+              opening_balance: float = 0.0) -> float:
+    """Account equity just before ``when``: the balance then plus the floating P&L of positions open then."""
+    closed = [t for t in trades if t.close_time_utc < when and t.balance_after is not None]
+    last = max(closed, key=lambda t: t.close_time_utc, default=None)
+    balance, since = (last.balance_after, last.close_time_utc) if last else (opening_balance, None)
+    balance += sum(f.amount for f in cash_flows if f.type not in NON_BALANCE_FLOW_TYPES and f.time_utc < when
+                   and (since is None or f.time_utc > since))
+    times = [p.time_utc for p in curve]
+    i = bisect_right(times, when) - 1
+    floating = curve[i].floating if i >= 0 and when - curve[i].time_utc <= MINUTE else 0.0
+    return round(balance + floating, 2)
+
+
+def basket_drawdowns(sequences, trades: list[Trade], bars_by_symbol: dict[str, list[Bar]], *,
+                     symbol_specs: dict[str, dict] | None = None, covered=frozenset(),
+                     cash_flows=(), curve=(), opening_balance: float = 0.0) -> list[BasketDrawdown]:
+    """The deepest point of every basket whose legs all have one-minute bars (``covered``: position ids)."""
+    specs = symbol_specs or {}
+    by_pid = {t.position_id: t for t in trades}
+    cash_flows, curve = list(cash_flows), list(curve)
+    out = []
+    for seq in sequences:
+        legs = [by_pid[pid] for pid in seq.position_ids if pid in by_pid]
+        if not legs or any(t.position_id not in covered for t in legs):
+            continue
+        symbol = legs[0].symbol
+        bars = bars_by_symbol.get(symbol, [])
+        bar_at = {b.time_utc: b for b in bars}
+        money = value_per_price_unit([t for t in trades if t.symbol == symbol], specs.get(symbol)) or 0.0
+        point = symbol_point(specs.get(symbol), bars)
+        start, end = min(t.open_time_utc for t in legs), max(t.close_time_utc for t in legs)
+        worst, worst_time, last_bar = 0.0, None, None
+        m = floor_minute(start)
+        while m <= floor_minute(end):
+            last_bar = bar_at.get(m, last_bar)
+            stamp = m + MINUTE
+            running = sum(t.net_profit for t in legs if t.close_time_utc <= stamp)
+            if last_bar is not None:
+                for t in legs:
+                    if t.open_time_utc <= stamp < t.close_time_utc:
+                        if t.side == "buy":
+                            running += (last_bar.close - t.open_price) * t.lots * money
+                        else:
+                            running += (t.open_price - last_bar.close - last_bar.spread * point) * t.lots * money
+            if running < worst:
+                worst, worst_time = running, stamp  # end of the minute, as on the equity curve
+            m += MINUTE
+        equity = equity_at(start, trades, cash_flows, curve, opening_balance)
+        depth = round(-worst, 2)
+        out.append(BasketDrawdown(seq.sequence_id, depth, round(depth / equity, 4) if equity > 0 else None,
+                                  worst_time, equity))
+    return out

@@ -97,13 +97,21 @@
   .badge.warn { background: var(--warn-soft); color: var(--warn); }
   .badge.info { background: var(--code); color: var(--muted); }
   .note { font-size: 13px; color: var(--warn); margin-top: 6px; }
+  /* what an answer is about: the level (account / baskets / single trades) and switches to another level */
+  .scope { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .scope span { font-size: 12px; border-radius: 999px; padding: 2px 9px; background: var(--code); color: var(--muted); }
+  .scope span.level { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  .switches { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .switches .chip { font-size: 13px; padding: 5px 11px; }
+  .group-title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 12px 0 6px; }
   .error { color: var(--bad); background: var(--bad-soft); border-radius: 10px; padding: 8px 12px; margin-top: 4px; }
   .chart { margin-top: 10px; }
   .chart svg { width: 100%; height: auto; display: block; }
   .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 10px; margin-top: 10px; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
   th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { background: var(--code); text-align: left; font-weight: 600; text-transform: capitalize; }
+  th { background: var(--code); text-align: left; font-weight: 600; }
+  th::first-letter { text-transform: uppercase; }
   tr:last-child td { border-bottom: 0; }
   td.num { text-align: right; } td.neg { color: var(--neg); }
   .more-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 6px 0 0; font-size: 13px; }
@@ -276,7 +284,15 @@ function cell(col, v, shares) {
   }
   return String(v);
 }
-const label = (c) => c.replaceAll("_", " ");
+// column names in plain words; a "sequence" is shown as a basket everywhere
+const NAMES = {
+  sequence_id: "basket", depth: "legs", max_lot_multiplier: "lot multiplier", max_open: "most open at once",
+  drawdown_abs: "basket drawdown", drawdown_pct: "basket drawdown (% of equity)", drawdown_time_utc: "deepest at (UTC)",
+  equity_at_start: "equity at start", net_pnl: "net", is_win: "won", position_id: "trade",
+  episode_id: "drawdown", depth_abs: "depth", depth_pct: "depth (% at stake)",
+  drawdown_episode_id: "balance drawdown", equity_drawdown_episode_id: "equity drawdown",
+};
+const label = (c) => NAMES[c] || c.replaceAll("_", " ");
 const store = {
   key: (login) => `tq.chats.${login}`,
   load(login) { try { return JSON.parse(localStorage.getItem(this.key(login)) || "[]"); } catch { return []; } },
@@ -472,7 +488,7 @@ function hours(min) { return min >= 120 ? `${(min / 60).toFixed(1)} h` : `${Math
 
 async function openChart(kind, id) {
   const modal = $("modal"), body = $("modalBody");
-  $("modalTitle").textContent = kind === "trade" ? `Trade ${id}` : `Sequence ${id}`;
+  $("modalTitle").textContent = kind === "trade" ? `Trade ${id}` : `Basket ${id}`;
   body.replaceChildren(el("div", { class: "sub" }, "Loading the price chart…"));
   modal.hidden = false;
   $("modalClose").focus();
@@ -496,16 +512,18 @@ async function openChart(kind, id) {
       ["Take profit", t.tp ? String(t.tp) : "none"], ["Outcome", t.outcome || "–"],
     ]));
     if (data.sequence_id) {
-      const b = el("button", { class: "chip", type: "button", style: "margin-top:12px" }, `Show its whole sequence (${data.sequence_id})`);
+      const b = el("button", { class: "chip", type: "button", style: "margin-top:12px" }, `Show its whole basket (${data.sequence_id})`);
       b.addEventListener("click", () => openChart("sequence", data.sequence_id));
       body.appendChild(b);
     }
   } else {
     const s = data.sequence;
-    $("modalTitle").textContent = `Sequence ${s.sequence_id} · ${s.symbol} ${s.type.replace("_", " + ")} · ${s.depth} levels`;
+    $("modalTitle").textContent = `Basket ${s.sequence_id} · ${s.symbol} ${s.side} · ${s.type.replace("_", " + ")} · ${s.depth} legs`;
     chartBlock(data, body);
     body.appendChild(kv([
-      ["Side", s.side], ["Levels", String(s.depth)], ["Lots", `${s.first_lot} → ${s.max_lot} (${s.max_lot_multiplier}×)`],
+      ["Basket drawdown", s.drawdown_abs === null || s.drawdown_abs === undefined ? "needs price bars"
+        : `${money(s.drawdown_abs)} (${pct(s.drawdown_pct)} of equity)`],
+      ["Legs", String(s.depth)], ["Lots", `${s.first_lot} → ${s.max_lot} (${s.max_lot_multiplier}×)`],
       ["Most open at once", String(s.max_open)], ["Started (UTC)", s.start_utc.slice(0, 16)], ["Ended (UTC)", s.end_utc.slice(0, 16)],
       ["Net result", money(s.net_pnl)], ["Outcome", s.is_win ? "closed in profit" : "closed at a loss"],
     ]));
@@ -543,25 +561,33 @@ function renderOverview(container) {
     tiles.appendChild(tile("Win rate", pct(s.win_rate), s.profit_factor ? `profit factor ${s.profit_factor.toFixed(2)}` : ""));
     tiles.appendChild(tile("Balance", `${money(o.balance)} ${cur}`, `deposits ${money(s.deposits)}`));
     if (s.equity_drawdown !== null && s.equity_drawdown !== undefined) {
-      tiles.appendChild(tile("Worst drawdown (equity)", money(s.equity_drawdown),
-        `${pct(s.equity_drawdown_pct)} of the money at stake · closed trades only: ${money(s.max_drawdown)}`, s.equity_drawdown_pct >= 0.5 ? "neg" : ""));
+      tiles.appendChild(tile("Account drawdown (equity)", money(s.equity_drawdown),
+        `deepest · ${pct(s.equity_drawdown_pct)} of the money at stake · balance only: ${money(s.max_drawdown)}`, s.equity_drawdown_pct >= 0.5 ? "neg" : ""));
     } else {
-      tiles.appendChild(tile("Worst drawdown (balance)", money(s.max_drawdown), pct(s.max_drawdown_pct) + " of the money at stake",
+      tiles.appendChild(tile("Account drawdown (balance)", money(s.max_drawdown), "deepest · " + pct(s.max_drawdown_pct) + " of the money at stake",
         s.max_drawdown_pct >= 0.5 ? "neg" : ""));
     }
+    const linkTile = (t, id) => {
+      t.classList.add("link");
+      t.setAttribute("role", "button");
+      t.setAttribute("tabindex", "0");
+      t.addEventListener("click", () => openChart("sequence", id));
+      t.addEventListener("keydown", (e) => { if (e.key === "Enter") openChart("sequence", id); });
+      return t;
+    };
     const deep = s.deepest_sequence;
-    const deepTile = tile("Deepest sequence", deep ? `${deep.depth} levels` : "none",
+    const deepTile = tile("Deepest basket", deep ? `${deep.depth} legs` : "none",
       deep ? `${deep.multiplier}× lots · net ${money(deep.net)} · tap for the chart` : "no martingale or grid",
       deep && deep.depth >= 6 ? "neg" : "");
-    if (deep && deep.id) {
-      deepTile.classList.add("link");
-      deepTile.setAttribute("role", "button");
-      deepTile.setAttribute("tabindex", "0");
-      deepTile.addEventListener("click", () => openChart("sequence", deep.id));
-      deepTile.addEventListener("keydown", (e) => { if (e.key === "Enter") openChart("sequence", deep.id); });
+    tiles.appendChild(deep && deep.id ? linkTile(deepTile, deep.id) : deepTile);
+    const wb = s.worst_basket;
+    if (wb) {
+      tiles.appendChild(linkTile(tile("Basket drawdown", `${pct(wb.drawdown_pct)} of equity`,
+        `deepest · ${money(wb.drawdown)} · basket ${wb.id} ${wb.is_win ? "closed in profit" : "closed at a loss"}`,
+        wb.drawdown_pct >= 0.5 ? "neg" : ""), wb.id));
+    } else {
+      tiles.appendChild(tile("Trades", String(o.trades), `${s.withdrawals ? "withdrawn " + money(-s.withdrawals) : ""}`));
     }
-    tiles.appendChild(deepTile);
-    tiles.appendChild(tile("Trades", String(o.trades), `${s.withdrawals ? "withdrawn " + money(-s.withdrawals) : ""}`));
     container.appendChild(tiles);
     const charts = el("div", { class: "charts" });
     if (o.balance_curve.length > 1) {
@@ -584,13 +610,21 @@ function renderOverview(container) {
     }
   }
   container.appendChild(el("div", { class: "suggest-title" }, "Try asking"));
-  const chips = el("div", { class: "chips" });
-  state.presets.slice(0, 10).forEach((p) => {
-    const chip = el("button", { class: "chip", type: "button" }, p.question);
-    chip.addEventListener("click", () => askPreset(p));
-    chips.appendChild(chip);
+  // grouped by what they are about, so it is clear whether a question counts the account, baskets or trades
+  const noBasketDrawdown = !(o.stats && o.stats.worst_basket);
+  const GROUP_NAMES = { Account: "Whole account", Baskets: "Baskets (martingale / grid)", Trades: "Single trades" };
+  ["Account", "Baskets", "Trades"].forEach((g) => {
+    const items = state.presets.filter((p) => p.group === g && !(p.needs === "basket_drawdown" && noBasketDrawdown));
+    if (!items.length) return;
+    container.appendChild(el("div", { class: "group-title" }, GROUP_NAMES[g]));
+    const chips = el("div", { class: "chips" });
+    items.forEach((p) => {
+      const chip = el("button", { class: "chip", type: "button" }, p.question);
+      chip.addEventListener("click", () => askPreset(p));
+      chips.appendChild(chip);
+    });
+    container.appendChild(chips);
   });
-  container.appendChild(chips);
 }
 
 /* ---------- messages ---------- */
@@ -621,8 +655,9 @@ function renderTable(result, limit) {
       const td = el("td", { class: (num ? "num" : "") + (num && v < 0 ? " neg" : "") });
       const kind = col === "position_id" ? "trade" : col === "sequence_id" ? "sequence" : null;
       if (kind && Number.isInteger(v)) {
-        const link = el("button", { class: "id-link", type: "button", title: `Show this ${kind} on a price chart`,
-          "aria-label": `${kind} ${v}: show on a price chart` }, String(v));
+        const noun = kind === "sequence" ? "basket" : kind;
+        const link = el("button", { class: "id-link", type: "button", title: `Show this ${noun} on a price chart`,
+          "aria-label": `${noun} ${v}: show on a price chart` }, String(v));
         link.addEventListener("click", () => openChart(kind, v));
         td.appendChild(link);
       } else {
@@ -636,8 +671,31 @@ function renderTable(result, limit) {
   wrap.appendChild(table);
   return wrap;
 }
+function scopeLine(scope) {
+  const box = el("div", { class: "scope", title: "What this answer counted" });
+  scope.labels.forEach((t, i) => box.appendChild(el("span", { class: i === 0 ? "level" : "" }, t)));
+  return box;
+}
+function switchButtons(scope) {
+  const box = el("div", { class: "switches" });
+  scope.switches.forEach((s) => {
+    if (s.kind === "ask" && !state.modelReady) return;
+    const b = el("button", { class: "chip", type: "button" }, s.label);
+    b.addEventListener("click", () => runSwitch(s));
+    box.appendChild(b);
+  });
+  return box.childElementCount ? box : null;
+}
+function runSwitch(s) {
+  if (s.kind === "spec") {
+    send(s.question, (chat) => api("/api/query", { login: state.login, spec: s.spec, question: s.question, session_id: chat.sessionId }));
+  } else {
+    send(s.question, (chat) => api("/api/ask", { login: state.login, question: s.question, session_id: chat.sessionId }));
+  }
+}
 function renderAnswer(bubble, data) {
   const r = data.result;
+  if (data.scope) bubble.appendChild(scopeLine(data.scope));
   if (data.kind === "clarify" || data.kind === "unsupported") {
     bubble.appendChild(el("span", { class: "badge info" }, data.kind === "clarify" ? "Needs a detail" : "Outside what I can answer"));
     bubble.appendChild(el("div", { class: "answer-text" }, data.text));
@@ -647,7 +705,7 @@ function renderAnswer(bubble, data) {
   } else if (r) {
     bubble.appendChild(el("span", { class: "badge " + (data.model ? "warn" : "info") },
       data.model ? "The written answer didn't pass the number check, so here is the data itself"
-                 : "Example question: answered straight from your data"));
+                 : "Answered straight from your data, no AI needed"));
   }
   if (data.error) bubble.appendChild(el("div", { class: "error" }, data.error));
   if (r) {
@@ -666,6 +724,8 @@ function renderAnswer(bubble, data) {
     } else if (!data.text) {
       bubble.appendChild(el("div", { class: "answer-text" }, "Nothing matched."));
     }
+    const switches = data.scope && switchButtons(data.scope);
+    if (switches) bubble.appendChild(switches);
     const details = el("details", { class: "details" });
     details.appendChild(el("summary", {}, "How this was found"));
     details.appendChild(el("div", { class: "interp" }, r.interpretation));
@@ -746,7 +806,7 @@ async function send(question, request) {
   updateSend();
 }
 function askPreset(p) {
-  send(p.question, () => api("/api/preset", { login: state.login, number: p.number }));
+  send(p.question, (chat) => api("/api/preset", { login: state.login, number: p.number, session_id: chat.sessionId }));
 }
 
 /* ---------- composer, menu, accounts ---------- */

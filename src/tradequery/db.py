@@ -33,7 +33,7 @@ from .models import TRADE_TYPES, Bar, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SQL_TYPES = {"int": "INTEGER", "float": "REAL", "str": "TEXT", "datetime": "TEXT", "bool": "INTEGER"}
 
@@ -218,6 +218,17 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "f.minutes_in_loss, f.spread_at_open, f.risk_amount, f.planned_rr, f.r_multiple, f.sequence_id, "
         "f.streak_id, f.drawdown_episode_id, f.equity_drawdown_episode_id, COALESCE(f.news_overlap, 0) AS news_overlap "
         "FROM trades t LEFT JOIN trade_facts f ON f.position_id = t.position_id",
+    ),
+    8: (
+        # Basket drawdown: how far each martingale/grid basket went into the red (closed legs plus open legs,
+        # minute by minute) before it closed, also as a share of equity when it opened. Needs one-minute bars.
+        "CREATE TABLE sequence_facts (sequence_id INTEGER PRIMARY KEY, drawdown_abs REAL, drawdown_pct REAL, "
+        "drawdown_time_utc TEXT, equity_at_start REAL)",
+        "DROP VIEW v_sequences",
+        "CREATE VIEW v_sequences AS SELECT s.*, f.drawdown_abs, f.drawdown_pct, f.drawdown_time_utc, "
+        "f.equity_at_start, EXISTS (SELECT 1 FROM sequence_trades st JOIN trade_news n "
+        "ON n.position_id = st.position_id WHERE st.sequence_id = s.sequence_id) AS news_overlap "
+        "FROM sequences s LEFT JOIN sequence_facts f ON f.sequence_id = s.sequence_id",
     ),
 }
 
@@ -477,7 +488,7 @@ def rebuild_derived(conn: sqlite3.Connection, settings: Settings) -> tuple[list[
 
 def save_facts(conn: sqlite3.Connection, built) -> None:
     """Replace the derived query layers (facts.Facts)."""
-    for table in ("trade_facts", "streaks", "drawdown_episodes", "exposure", "equity_curve"):
+    for table in ("trade_facts", "streaks", "drawdown_episodes", "exposure", "equity_curve", "sequence_facts"):
         conn.execute(f"DELETE FROM {table}")
     t = lambda v: format_time(v) if v else None  # noqa: E731
     conn.executemany(
@@ -504,6 +515,10 @@ def save_facts(conn: sqlite3.Connection, built) -> None:
     conn.executemany(
         "INSERT INTO equity_curve VALUES (?, ?, ?, ?, ?)",
         [(t(p.time_utc), p.balance, p.floating, p.equity, p.equity_low) for p in built.equity],
+    )
+    conn.executemany(
+        "INSERT INTO sequence_facts VALUES (?, ?, ?, ?, ?)",
+        [(b.sequence_id, b.depth_abs, b.depth_pct, t(b.time_utc), b.equity_at_start) for b in built.baskets],
     )
 
 

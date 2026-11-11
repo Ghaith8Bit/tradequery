@@ -194,6 +194,13 @@ def test_drawdown_default_follows_the_account():
     assert "Drawdown default" in SPEC_SYSTEM and "equity_drawdown_episode_id" in SPEC_SYSTEM
 
 
+def test_answers_say_basket_not_sequence():
+    from tradequery.ask import plain_words
+    assert plain_words("Across 1 baskets, sequence 222 closed in profit.") == "Across 1 basket, basket 222 closed in profit."
+    assert plain_words("Sequences of 12 trades") == "Baskets of 12 trades"
+    assert plain_words("11 baskets and 21 trades") == "11 baskets and 21 trades"
+
+
 def test_follow_ups_see_the_ids_the_last_answer_found():
     from tradequery.ask import _found_ids, _spec_prompt
     from tradequery.execute import Result

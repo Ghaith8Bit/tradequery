@@ -114,11 +114,11 @@ make web          # http://localhost:8000 (reachable from this computer only); m
 
 A chat page that also works on a phone:
 
-- **Start screen:** the account overview (net result, win rate, balance, worst drawdown, deepest sequence), a balance chart, net result by weekday, plain risk facts, and suggested questions. Suggested questions run from hand-written specs with no model call.
-- **Answers:** typed questions are answered in chat bubbles, with a badge saying whether every number was checked. Answers get an automatic chart when their shape suits one, plus a "How this was found" panel with the spec and SQL. Chats are saved in the browser, per account.
+- **Start screen:** the account overview (net result, win rate, balance, account drawdown, deepest basket, basket drawdown), a balance chart, net result by weekday, plain risk facts, and suggested questions grouped by whole account, baskets and single trades. Suggested questions run from hand-written specs with no model call.
+- **Answers:** typed questions are answered in chat bubbles, with a badge saying whether every number was checked. A line of labels on top says what was counted ("Baskets · 1 basket found", "Single trades", "Account drawdown (equity)"). Switch buttons below re-ask at another level: the trades in a basket or drawdown, the balance drawdown instead of equity, or the same question per basket or for single trades. Answers get an automatic chart when their shape suits one, plus a "How this was found" panel with the spec and SQL. Chats are saved in the browser, per account.
 - **Upload report:** drop an MT5 history report (.html) anywhere on the page to add or extend an account. This works the same as `make import`: stored deals are never overwritten.
 - **Sync now:** downloads new trades from MT5 without the terminal. `make web` also starts a small **sync worker** in the Wine image when MT5 is set up. The page asks it to sync through files in `data/sync/`; your credentials stay in `.env` and never pass through the page. To also sync on a timer, set `SYNC_EVERY_MINUTES` in `.env`. The sidebar shows when the account was last updated.
-- **Trade charts:** click any position or sequence number in an answer (or the deepest-sequence tile) to see it on a candle chart. The chart is built from the stored one-minute bars and marks every entry, exit, stop loss and take profit. Hours without prices, such as weekends, are skipped and marked.
+- **Trade charts:** click any trade or basket number in an answer (or a basket tile) to see it on a candle chart. The chart is built from the stored one-minute bars and marks every entry, exit, stop loss and take profit. Hours without prices, such as weekends, are skipped and marked.
 
 The API behind it (FastAPI, `/api/docs`) opens one account database per request (read-only, except for uploads) and rate limits model calls.
 
@@ -206,6 +206,7 @@ To look inside the Wine container, run `make shell-mt5`. `make clean-mt5` delete
 - Balance drawdown covers closed trades only. Equity drawdown, MAE and MFE come from one-minute bars and are approximate: a bar holds the minute's high and low but not their order. A conservative "worst case within the minute" bound is shown next to equity drawdown.
 - Drawdown percentages are of the money at stake: the balance or equity at the peak plus deposits made before the trough.
 - A plain "drawdown" question means equity drawdown (open positions counted) when the account has price bars, and balance drawdown otherwise. Ask for "balance drawdown" to get closed trades only. After an upgrade, `docker compose run --rm app rebuild` refreshes the stored drawdowns and trade links.
+- Three drawdowns, always named: **account drawdown (balance)** (closed trades), **account drawdown (equity)** (open positions counted) and **basket drawdown**. A basket is a martingale or grid series (stored as a sequence). Its drawdown is how far its running result (closed legs plus open legs, at each minute's close) went below zero before it closed, in money and as a share of account equity when the basket opened. It needs one-minute bars for every leg.
 - `make sync` also stores one-minute bars for the windows in which positions were open (only new windows on later runs; `--no-bars` skips them).
 
 ## Layout
