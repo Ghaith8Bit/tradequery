@@ -84,7 +84,8 @@ def choose_model(names: list[str]) -> str | None:
 
 class GeminiProvider(Provider):
     name = "gemini"
-    retry_seconds = 5.0
+    # pauses before each retry on a server error (503 "high demand" usually clears within seconds)
+    retry_pauses = (1.0, 3.0)
 
     def __init__(self, api_key: str, model: str | None = None, *, timeout_seconds: float = 60.0, sleep=None):
         import time
@@ -130,14 +131,14 @@ class GeminiProvider(Provider):
             response_mime_type="application/json" if json_mode else None,
         )
         response = None
-        for attempt in (1, 2):
+        for attempt in range(len(self.retry_pauses) + 1):
             try:
                 response = self._client.models.generate_content(model=self.model, contents=prompt, config=config)
                 break
             except self._errors.APIError as error:
                 # 5xx ("high demand", overloaded) is usually brief: one retry after a short pause
-                if attempt == 1 and (getattr(error, "code", 0) or 0) >= 500:
-                    self._sleep(self.retry_seconds)
+                if attempt < len(self.retry_pauses) and (getattr(error, "code", 0) or 0) >= 500:
+                    self._sleep(self.retry_pauses[attempt])
                     continue
                 raise self._translate(error) from None
         text = response.text

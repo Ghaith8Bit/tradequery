@@ -164,10 +164,10 @@ def test_gemini_retries_once_on_a_temporary_server_error():
         p._client = SimpleNamespace(models=FakeModels(failures))
         return p
 
-    once = provider([503])
-    assert once.generate("s", "p")[0] == "ok" and once._client.models.calls == 2
+    twice = provider([503, 503])
+    assert twice.generate("s", "p")[0] == "ok" and twice._client.models.calls == 3
     with pytest.raises(LLMError, match="503"):
-        provider([503, 503]).generate("s", "p")
+        provider([503, 503, 503]).generate("s", "p")
 
 
 def test_drawdown_default_follows_the_account():
