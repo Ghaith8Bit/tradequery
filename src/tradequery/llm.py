@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 
@@ -46,6 +47,12 @@ class Provider:
     def generate(self, system: str, prompt: str, *, json_mode: bool = False) -> tuple[str, Usage]:
         raise NotImplementedError
 
+    def stream(self, system: str, prompt: str) -> Iterator[str | Usage]:
+        """The reply in pieces as it is written, then one Usage. Default: the whole reply as one piece."""
+        text, usage = self.generate(system, prompt)
+        yield text
+        yield usage
+
 
 @dataclass
 class FakeProvider(Provider):
@@ -64,6 +71,12 @@ class FakeProvider(Provider):
         if isinstance(reply, Exception):
             raise reply
         return reply, Usage(1, len(system + prompt) // 4, len(reply) // 4)
+
+    def stream(self, system: str, prompt: str) -> Iterator[str | Usage]:
+        text, usage = self.generate(system, prompt)
+        for word in re.findall(r"\S+\s*", text):  # word by word, like a real stream
+            yield word
+        yield usage
 
 
 def _version_key(name: str) -> tuple:
@@ -168,10 +181,44 @@ class GeminiProvider(Provider):
         if not text:
             feedback = getattr(response, "prompt_feedback", None)
             raise LLMError(f"Gemini returned no text{f' ({feedback})' if feedback else ''}")
-        meta = response.usage_metadata
-        usage = Usage(1, getattr(meta, "prompt_token_count", 0) or 0,
-                      (getattr(meta, "candidates_token_count", 0) or 0) + (getattr(meta, "thoughts_token_count", 0) or 0))
-        return text, usage
+        return text, _usage_of(response.usage_metadata)
+
+    def stream(self, system: str, prompt: str) -> Iterator[str | Usage]:
+        """Pieces of the reply as Gemini writes them. Errors before the first piece are retried like generate's."""
+        config = self._types.GenerateContentConfig(system_instruction=system, temperature=0.0, max_output_tokens=4096)
+        for attempt in range(len(self.retry_pauses) + 1):
+            started, meta = False, None
+            try:
+                for chunk in self._client.models.generate_content_stream(model=self.model, contents=prompt, config=config):
+                    meta = getattr(chunk, "usage_metadata", None) or meta
+                    piece = getattr(chunk, "text", None)
+                    if piece:
+                        started = True
+                        yield piece
+                if not started:
+                    raise LLMError("Gemini returned no text")
+                yield _usage_of(meta)
+                return
+            except self._errors.APIError as error:
+                if not started and attempt < len(self.retry_pauses) and (getattr(error, "code", 0) or 0) >= 500:
+                    self._sleep(self.retry_pauses[attempt])
+                    continue
+                raise self._translate(error) from None
+            except LLMError:
+                raise
+            except Exception as error:  # transport failures (timeouts, DNS) from the SDK's HTTP client
+                if not (isinstance(error, (OSError, TimeoutError)) or _is_network_error(error)):
+                    raise
+                if not started and attempt < len(self.retry_pauses):
+                    self._sleep(self.retry_pauses[attempt])
+                    continue
+                raise LLMError(f"Could not reach Gemini ({type(error).__name__}). Check the internet connection "
+                               "and try again.") from None
+
+
+def _usage_of(meta) -> Usage:
+    return Usage(1, getattr(meta, "prompt_token_count", 0) or 0,
+                 (getattr(meta, "candidates_token_count", 0) or 0) + (getattr(meta, "thoughts_token_count", 0) or 0))
 
 
 def provider_from_env() -> Provider:

@@ -10,6 +10,7 @@ to the model, which is better at saying what differs.
 from __future__ import annotations
 
 from .execute import Result
+from .focus import focus_column, news_verdict
 from .scope import basis_of
 from .spec import QuerySpec
 
@@ -20,10 +21,11 @@ WORDS = {
     "episode_id": "drawdown", "position_id": "trade", "gross_lots": "lots open", "trade_count": "trades",
     "win_rate": "win rate", "profit_factor": "profit factor", "total_lots": "total lots", "hold_minutes": "minutes held",
     "avg_r": "average R", "total_r": "total R", "max_drawdown": "drawdown on closed trades",
-    "max_drawdown_pct": "drawdown on closed trades (% at stake)",
+    "max_drawdown_pct": "drawdown on closed trades (% at stake)", "floating_pnl": "open trades' result",
 }
 NOUNS = {"trades": "trade", "sequences": "basket", "drawdown_episodes": "drawdown", "streaks": "streak",
-         "cash_flows": "deposit or withdrawal", "news_events": "news event", "exposure": "moment"}
+         "cash_flows": "deposit or withdrawal", "news_events": "news event", "exposure": "moment",
+         "equity_curve": "moment"}
 SHARE = ("_pct", "_share")
 MAX_FIELDS = 5
 
@@ -63,11 +65,20 @@ def _pairs(row: dict, skip=()) -> str:
     return ", ".join(parts)
 
 
-def _drawdown(row: dict, spec: QuerySpec) -> str | None:
+def _drawdown(row: dict, spec: QuerySpec, question: str = "") -> str | None:
     if "depth_abs" not in row:
         return None
+    lead = ""
+    focus = focus_column(question, row)
+    if focus == "news_loss_share":
+        lead = news_verdict(row["news_loss_share"]) + " "
+    elif focus == "duration_days" and row.get("duration_days") is not None:
+        lead = f"It lasted {value_text('duration_days', row['duration_days'])} days. "
+    elif focus == "recovery_time_utc":
+        lead = (f"It recovered on {value_text('t', row['recovery_time_utc'])} UTC. " if row["recovery_time_utc"]
+                else "It has not recovered yet. ")
     basis = row.get("basis") or basis_of(spec) or "balance"
-    text = f"Your account drawdown ({basis}) went {value_text('depth_abs', row['depth_abs'])} deep"
+    text = lead + f"Your account drawdown ({basis}) went {value_text('depth_abs', row['depth_abs'])} deep"
     if row.get("depth_pct") is not None:
         text += f" ({value_text('depth_pct', row['depth_pct'])} of the money at stake)"
     if row.get("peak_time_utc") and row.get("trough_time_utc"):
@@ -118,6 +129,9 @@ def _summary(row: dict, spec: QuerySpec) -> str:
     narrowed = bool(spec.filters or spec.time_range)
     count_col = next((a.alias for a in spec.aggregations if a.func == "count"), None)
     count = row.get(count_col) if count_col else row.get("trade_count") if spec.metrics else None
+    if spec.entity == "equity_curve":  # moments of one curve: "in that period", never "across 1,440 moments"
+        lead = "In that period" if spec.time_range else "Over your whole equity history"
+        return f"{lead}: {_pairs(row, skip={count_col})}."
     if count is not None:
         lead = f"Across {count} {'matching ' if narrowed else ''}{noun}{'' if count == 1 else 's'}"
     else:
@@ -125,7 +139,7 @@ def _summary(row: dict, spec: QuerySpec) -> str:
     return f"{lead}: {_pairs(row, skip={count_col, 'trade_count'})}."
 
 
-def template_answer(spec: QuerySpec, result: Result) -> str | None:
+def template_answer(spec: QuerySpec, result: Result, question: str = "") -> str | None:
     """A plain sentence for a simple result, or None when the model should explain it."""
     if spec.compare:
         return None
@@ -153,7 +167,7 @@ def template_answer(spec: QuerySpec, result: Result) -> str | None:
     if len(rows) == 1:
         row = dict(zip(result.columns, rows[0]))
         if spec.entity == "drawdown_episodes":
-            return _drawdown(row, spec)
+            return _drawdown(row, spec, question)
         if spec.entity == "sequences":
             return _basket(row)
         if spec.entity == "streaks":

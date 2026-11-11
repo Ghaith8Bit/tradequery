@@ -96,6 +96,13 @@ ENTITIES: dict[str, Entity] = {
         ("episode_id", "basis", "peak_time_utc", "trough_time_utc", "recovery_time_utc", "depth_abs", "depth_pct",
          "duration_days", "trade_count", "news_loss_share"),
     ),
+    # minute by minute from the stored price bars (empty without them): the account at any moment
+    "equity_curve": Entity(
+        "equity_curve", "time_utc",
+        dict(time_utc="time", balance="num", floating_pnl="num", equity="num"),
+        (),
+        ("time_utc", "balance", "floating_pnl", "equity"),
+    ),
     "news_events": Entity(
         "news_events", "time_utc",
         dict(value_id="int", event_id="int", time_utc="time", currency="text", importance="text", name="text",
@@ -162,7 +169,8 @@ class QuerySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["query", "clarify", "unsupported"] = "query"
     message: str | None = None  # the clarifying question, or why it is unsupported
-    entity: Literal["trades", "sequences", "streaks", "exposure", "cash_flows", "drawdown_episodes", "news_events"] | None = None
+    entity: Literal["trades", "sequences", "streaks", "exposure", "cash_flows", "drawdown_episodes", "news_events",
+                    "equity_curve"] | None = None
     fields: list[str] = []  # columns to return (default: the entity's usual columns)
     filters: list[Filter] = []
     time_range: TimeRange | None = None
@@ -189,6 +197,11 @@ class QuerySpec(BaseModel):
             return self
         if self.entity is None:
             raise ValueError("a query needs an entity")
+        # "lots open at 15:00" sometimes arrives as a range from 15:00 to 15:00: that is one moment
+        tr = self.time_range
+        if (self.entity == "exposure" and self.as_of is None and tr is not None and tr.timezone == "server"
+                and isinstance(tr.start, datetime) and tr.start == tr.end):
+            self.as_of, self.time_range = tr.start, None
         ent = ENTITIES[self.entity]
         known = ", ".join(sorted(ent.fields))
 
@@ -263,7 +276,8 @@ def _check_filter(f: Filter, kind: str) -> None:
         raise ValueError(f"filters: in needs 1 to 50 values for {f.field!r}")
     for v in values:
         if kind in ("num", "int") and (isinstance(v, bool) or not isinstance(v, (int, float))):
-            raise ValueError(f"filters: {f.field!r} needs a number, got {v!r}")
+            hint = " (there is no null test: for trades in any basket use sequence_id gt 0)" if v is None else ""
+            raise ValueError(f"filters: {f.field!r} needs a number, got {v!r}{hint}")
         if kind == "text" and not isinstance(v, str):
             raise ValueError(f"filters: {f.field!r} needs text, got {v!r}")
         if kind == "bool" and not isinstance(v, bool):

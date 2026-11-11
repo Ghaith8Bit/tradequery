@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -117,10 +118,69 @@ def execute(spec: QuerySpec, path, settings: Settings, *, seconds: float = QUERY
             cap = 1 if spec.as_of is not None and not spec.limit else min(spec.limit or 100, MAX_ROWS)
             # Cut short only counts when the spec did not ask for that many rows (a top-1 is not "more").
             truncated = len(rows) > cap and (spec.limit is None or spec.limit == MAX_ROWS) and spec.as_of is None
-            return Result("query", columns, rows[:cap], truncated, interpretation, [], sql)
+            rows = rows[:cap]
+            notes = deposit_notes(conn, spec, columns, rows) if spec.entity == "drawdown_episodes" else []
+            return Result("query", columns, rows, truncated, interpretation, notes, sql)
         return _execute_metrics(conn, spec, settings, account, interpretation, seconds)
     finally:
         conn.close()
+
+
+MAX_DEPOSIT_NOTES = 3
+
+
+def deposit_notes(conn, spec: QuerySpec, columns: list[str], rows: list) -> list[str]:
+    """Say when money was added inside a drawdown: its % then divides by more money and looks smaller.
+
+    For each drawdown in the result (at most 3) with deposits between its peak and its low: the deposits,
+    and how far equity (or balance) had already fallen before the first one, from the stored curve.
+    """
+    if "episode_id" not in columns:
+        return []
+    basis_filter = next((f.value for f in spec.filters if f.field == "basis" and f.op == "eq"), None)
+    at = columns.index("episode_id")
+    basis_at = columns.index("basis") if "basis" in columns else None
+    notes = []
+    for row in rows[:MAX_DEPOSIT_NOTES]:
+        basis = row[basis_at] if basis_at is not None else basis_filter
+        if basis not in ("equity", "balance"):
+            continue
+        ep = conn.execute("SELECT peak_time_utc, trough_time_utc, added_capital FROM drawdown_episodes "
+                          "WHERE episode_id = ? AND basis = ?", (row[at], basis)).fetchone()
+        if not ep or not ep[2] or ep[2] <= 0:
+            continue
+        peak, trough = ep[0], ep[1]
+        deposits = conn.execute("SELECT time_utc, amount FROM cash_flows WHERE type = 'deposit' AND amount > 0 "
+                                "AND time_utc > ? AND time_utc <= ? ORDER BY time_utc", (peak, trough)).fetchall()
+        if not deposits:
+            notes.append(f"Money was added during drawdown {row[at]}, so its % divides by more money and looks smaller.")
+            continue
+        total = sum(d[1] for d in deposits)
+        days = ", ".join(sorted({d[0][:10] for d in deposits}))
+        word = "A deposit" if len(deposits) == 1 else f"{len(deposits)} deposits"
+        note = (f"{word} of {total:,.2f} on {days} fell inside drawdown {row[at]}; its % divides by the money at "
+                "stake including it, so it looks smaller than the loss felt.")
+        before = _low_before(conn, basis, peak, deposits[0][0])
+        if before:
+            start, low, low_time = before
+            if start > 0 and low < start:
+                fall = math.floor((start - low) / start * 10000) / 100  # rounded down: 99.997% is not "100%"
+                note += (f" Before that deposit, {basis} fell from {start:,.2f} to {low:,.2f} on {low_time[:16]} UTC "
+                         f"({fall:.2f}% below where the drawdown began).")
+        notes.append(note)
+    return notes
+
+
+def _low_before(conn, basis: str, peak: str, until: str):
+    """(value at the peak, lowest value, its time) between the peak and ``until``, from the equity curve."""
+    column = "equity" if basis == "equity" else "balance"
+    start = conn.execute(f"SELECT {column} FROM equity_curve WHERE time_utc <= ? ORDER BY time_utc DESC LIMIT 1",
+                         (peak,)).fetchone()
+    low = conn.execute(f"SELECT {column}, time_utc FROM equity_curve WHERE time_utc >= ? AND time_utc < ? "
+                       f"ORDER BY {column} ASC, time_utc ASC LIMIT 1", (peak, until)).fetchone()
+    if not start or not low:
+        return None
+    return start[0], low[0], low[1]
 
 
 def _execute_metrics(conn, spec, settings, account, interpretation, seconds) -> Result:

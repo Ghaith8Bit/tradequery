@@ -10,6 +10,7 @@ back to the model as a follow-up.
 
 from __future__ import annotations
 
+from .focus import focus_columns
 from .examples import trades_in, with_drawdown_basis
 from .execute import Result
 from .spec import ENTITIES, QuerySpec
@@ -19,13 +20,14 @@ LEVELS = {
     "sequences": "Baskets",
     "streaks": "Streaks of trades",
     "drawdown_episodes": "Account drawdown",
+    "equity_curve": "Account over time",
     "exposure": "Lots open",
     "cash_flows": "Deposits and withdrawals",
     "news_events": "News events",
 }
 
 # Groups for the suggested questions on the start screen.
-GROUPS = {"drawdown_episodes": "Account", "cash_flows": "Account", "exposure": "Account",
+GROUPS = {"drawdown_episodes": "Account", "cash_flows": "Account", "exposure": "Account", "equity_curve": "Account",
           "sequences": "Baskets", "trades": "Trades", "streaks": "Trades", "news_events": "Account"}
 
 DRILL_DOWN_FIELDS = ("sequence_id", "drawdown_episode_id", "equity_drawdown_episode_id", "streak_id", "position_id")
@@ -120,7 +122,7 @@ def describe(spec: QuerySpec | None, result: Result | None, *, has_equity: bool,
         if has_equity and basis in ("equity", "balance"):
             other = "balance" if basis == "equity" else "equity"
             switches.append({"label": f"Show the {other} drawdown instead", "kind": "spec",
-                             "question": f"The same, as {other} drawdown",
+                             "question": _again(question, f"as {other} drawdown"),
                              "spec": with_drawdown_basis(data, other)})
     elif spec.entity == "sequences":
         if one is not None and "sequence_id" in col:
@@ -135,7 +137,7 @@ def describe(spec: QuerySpec | None, result: Result | None, *, has_equity: bool,
         switches.append({"label": "Ask the same per basket", "kind": "ask",
                          "question": _again(question, "per basket instead of single trades")})
     return {"level": level_label(spec), "labels": labels, "switches": switches,
-            "headline": headline(spec, result)}
+            "headline": headline(spec, result, question)}
 
 
 # The number an answer card shows large, in order of preference, when the answer is a single row.
@@ -143,14 +145,18 @@ HEADLINE_COLUMNS = ("drawdown_pct", "depth_pct", "win_rate", "net_profit", "net_
                     "drawdown_abs", "profit_factor", "length", "gross_lots", "amount", "swap_total")
 
 
-def headline(spec: QuerySpec, result: Result) -> dict | None:
-    """The one number a single-row answer is about ({"column", "value"}), or None for lists and tables."""
+def headline(spec: QuerySpec, result: Result, question: str = "") -> dict | None:
+    """The one number a single-row answer is about ({"column", "value"}), or None for lists and tables.
+
+    A column the question asks about comes first ("Did news cause ..." -> the news share)."""
     if len(result.rows) != 1 or spec.group_by or spec.compare:
         return None
     row = dict(zip(result.columns, result.rows[0]))
     numeric = [c for c, v in row.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
                and not c.endswith("_id") and c not in ("is_win", "news_overlap")]
-    preferred = [m for m in spec.metrics if m in numeric] + [c for c in HEADLINE_COLUMNS if c in numeric] + numeric
+    asked = [c for c in focus_columns(question) if c in numeric]
+    preferred = (asked + [m for m in spec.metrics if m in numeric] + [c for c in HEADLINE_COLUMNS if c in numeric]
+                 + numeric)
     if not preferred:
         return None
     return {"column": preferred[0], "value": row[preferred[0]]}
