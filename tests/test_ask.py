@@ -30,8 +30,8 @@ def path(tmp_path_factory):
 
 def test_a_question_becomes_a_spec_a_table_and_a_checked_answer(path):
     fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK), "Your longest losing streak was 6 trades."])
-    answer = ask("What is my longest losing streak?", path, SETTINGS, fake)
-    assert answer.error is None and answer.verified
+    answer = ask("What is my longest losing streak?", path, SETTINGS, fake, explain="ai")
+    assert answer.error is None and answer.verified and answer.text_source == "model"
     assert answer.spec.entity == "streaks" and answer.result.rows[0][2] == 6
     assert answer.text == "Your longest losing streak was 6 trades."
     assert answer.usage.requests == 2
@@ -58,7 +58,7 @@ def test_two_invalid_specs_fail_politely(path):
 
 def test_invented_numbers_get_one_retry_then_the_table_without_prose(path):
     fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK), "It was 9 trades.", "It was 7 trades, costing 500."])
-    answer = ask("longest losing streak", path, SETTINGS, fake)
+    answer = ask("longest losing streak", path, SETTINGS, fake, explain="ai")
     assert not answer.verified and answer.text is None
     assert answer.result.rows  # the table is still there
     assert answer.unsupported_numbers == ["7", "500"]
@@ -67,7 +67,7 @@ def test_invented_numbers_get_one_retry_then_the_table_without_prose(path):
 
 def test_a_corrected_explanation_is_accepted(path):
     fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK), "It was 9 trades.", "It was 6 trades in a row."])
-    assert ask("longest losing streak", path, SETTINGS, fake).verified
+    assert ask("longest losing streak", path, SETTINGS, fake, explain="ai").verified
 
 
 def test_clarify_and_unsupported_answers_skip_the_query(path):
@@ -96,13 +96,13 @@ def test_provider_errors_are_reported_not_raised(path):
     answer = ask("anything", path, SETTINGS, FakeProvider([QuotaError("daily quota reached")]))
     assert answer.error == "daily quota reached"
     fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK), LLMError("network down")])
-    answer = ask("longest losing streak", path, SETTINGS, fake)
+    answer = ask("longest losing streak", path, SETTINGS, fake, explain="ai")
     assert answer.result.rows and "without an explanation" in answer.error
 
 
 def test_the_model_never_sees_trade_comments(path):
     fake = FakeProvider([json.dumps({"entity": "trades", "limit": 500}), "Answer without numbers."])
-    ask("show all my trades", path, SETTINGS, fake)
+    ask("show all my trades", path, SETTINGS, fake, explain="ai")
     everything_sent = " ".join(system + prompt for system, prompt, _ in fake.calls)
     assert INJECTION_COMMENT not in everything_sent  # the planted instruction in a trade comment
     assert "comment" not in json.loads(json.dumps(fake.calls[1][1]))  # no comment column in the table
@@ -130,7 +130,7 @@ def test_choose_model_prefers_the_newest_stable_flash_lite():
 def test_shares_reach_the_model_as_percentages(path):
     from tradequery.examples import WORST_DRAWDOWN
     fake = FakeProvider([json.dumps(WORST_DRAWDOWN), "Answer without numbers."])
-    ask("worst drawdown", path, SETTINGS, fake)
+    ask("worst drawdown", path, SETTINGS, fake, explain="ai")
     table = fake.calls[1][1].split("Result table:")[1]
     assert "%" in table and "0.0" not in table.split(chr(10))[1].split(" | ")[5]  # depth_pct column as a percentage
 
@@ -218,3 +218,31 @@ def test_follow_ups_see_the_ids_the_last_answer_found():
     assert _found_ids(many).endswith("(and 3 more rows)")
     assert _found_ids(Result("query", columns=["net"], rows=[[1.0]], truncated=False, interpretation="", notes=[],
                              sql="")) is None
+
+
+def test_a_simple_answer_is_written_by_a_template_with_one_model_call(path):
+    fake = FakeProvider([json.dumps(LONGEST_LOSING_STREAK)])  # no explanation scripted: none may be asked for
+    answer = ask("What is my longest losing streak?", path, SETTINGS, fake)
+    assert answer.verified and answer.text_source == "template" and answer.usage.requests == 1
+    assert answer.text.startswith("A losing streak of 6 trades in a row")
+
+
+def test_grouped_tables_still_go_to_the_model(path):
+    spec = {"entity": "trades", "group_by": ["weekday"], "metrics": ["win_rate"]}
+    fake = FakeProvider([json.dumps(spec), "Answer without numbers."])
+    answer = ask("win rate by weekday", path, SETTINGS, fake)
+    assert answer.text_source == "model" and answer.usage.requests == 2
+
+
+def test_the_explanation_prompt_leaves_out_the_account_number(path):
+    from tradequery.examples import WORST_DRAWDOWN
+    fake = FakeProvider([json.dumps(WORST_DRAWDOWN), "Answer without numbers."])
+    ask("worst drawdown", path, SETTINGS, fake, explain="ai")
+    assert "account 77" not in fake.calls[1][1].split("Result table:")[0]
+
+
+def test_groups_get_their_total_so_the_model_need_not_add_counts(path):
+    spec = {"entity": "trades", "group_by": ["canonical_symbol"], "aggregations": [{"func": "count", "alias": "trade_count"}]}
+    fake = FakeProvider([json.dumps(spec), "Of the 48 trades, results differed by symbol."])
+    answer = ask("net profit by symbol", path, SETTINGS, fake)
+    assert "trades in all" in fake.calls[1][1] and answer.verified  # 48 is the stated total, so it may be used

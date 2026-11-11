@@ -16,6 +16,11 @@ from tradequery.synthetic import generate_account
 SETTINGS = load_settings()
 
 
+def local(app):
+    """A client that looks like the TradeQuery page on this computer."""
+    return TestClient(app, base_url="http://localhost", headers={"X-TradeQuery": "1"})
+
+
 @pytest.fixture(scope="module")
 def root(tmp_path_factory):
     root = tmp_path_factory.mktemp("data")
@@ -33,7 +38,7 @@ def root(tmp_path_factory):
 def client(root, replies=(), factory=None):
     fake = FakeProvider(list(replies))
     app = create_app(data_root=root, settings=SETTINGS, provider_factory=factory or (lambda: fake))
-    return TestClient(app), fake
+    return local(app), fake
 
 
 def test_the_page_and_the_lists(root):
@@ -136,7 +141,7 @@ def test_model_calls_are_rate_limited(root):
 
 def fresh_client(tmp_path):
     app = create_app(data_root=tmp_path, settings=SETTINGS, provider_factory=lambda: FakeProvider([]))
-    return TestClient(app)
+    return local(app)
 
 
 def test_uploading_a_report_adds_the_account(tmp_path):

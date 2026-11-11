@@ -13,24 +13,38 @@
   POST /api/sync          ask the worker to sync now
   GET  /api/trade         one trade on a price chart (stored one-minute bars)
   GET  /api/sequence      one martingale/grid sequence on a price chart
+  GET  /api/usage         today's model requests and tokens against the daily budget
 
 Every request opens exactly one account database, read-only. Answers carry the
 interpretation line, notes, the result table, the spec and the SQL, so the page
 can show how each number was found. Questions are capped in length and model
-calls are rate limited per process.
+calls are rate limited per process and capped per day (usage.py).
+
+The page is for this computer only (compose publishes it on 127.0.0.1). Other
+websites open in the same browser must not be able to use it, so:
+- the Host header must be this computer (stops DNS rebinding, where a website's
+  name is pointed at 127.0.0.1 to read the answers);
+- every request that changes something (POST) must carry the X-TradeQuery
+  header, which a page on another site cannot add without permission this API
+  never gives, and must not come from another site's page (Origin, Sec-Fetch-Site);
+- the page may not be framed, and scripts may only talk to this server (CSP).
+TQ_ALLOWED_HOSTS in .env adds host names (comma separated), e.g. for a LAN name.
 """
 
 from __future__ import annotations
 
+import os
 import tempfile
 import time
 import uuid
 from collections import OrderedDict, deque
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import db, syncjobs
 from .ask import Answer, Session, _found_ids, ask, drawdown_default, is_share_column
@@ -45,8 +59,19 @@ from .pricechart import NotFound, sequence_chart, trade_chart
 from .scope import GROUPS, account_levels, describe
 from .settings import Settings, data_dir, load_settings
 from .spec import SpecError, parse_spec
+from .usage import UsageBook
 
 PAGE = Path(__file__).with_name("web") / "index.html"
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]", "::1")
+REQUEST_HEADER = "x-tradequery"  # the page sends it on every POST; other sites' pages cannot
+PAGE_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; "
+            "form-action 'none'; object-src 'none'")
+
+
+def allowed_hosts_from_env() -> list[str]:
+    extra = [h.strip() for h in os.environ.get("TQ_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    return [*LOCAL_HOSTS, *extra]
 MAX_SESSIONS = 200
 MODEL_CALLS_PER_MINUTE = 20
 MAX_REPORT_BYTES = 30 * 1024 * 1024  # a year of busy trading is a few MB
@@ -99,6 +124,7 @@ def _answer_json(answer: Answer, provider: Provider | None, session_id: str | No
         "unsupported_numbers": answer.unsupported_numbers,
         "error": answer.error,
         "error_detail": answer.error_detail,
+        "text_source": answer.text_source,
         "spec": answer.spec.model_dump(mode="json", exclude_defaults=True) if answer.spec else None,
         "result": _result_json(answer.result),
         "usage": {"requests": answer.usage.requests, "input_tokens": answer.usage.input_tokens,
@@ -125,13 +151,38 @@ class RateLimiter:
 
 
 def create_app(*, data_root: Path | str | None = None, settings: Settings | None = None,
-               provider_factory=provider_from_env) -> FastAPI:
-    app = FastAPI(title="TradeQuery", docs_url="/api/docs", openapi_url="/api/openapi.json")
+               provider_factory=provider_from_env, allowed_hosts: list[str] | None = None,
+               usage_book: UsageBook | None = None) -> FastAPI:
+    # no API docs page: it loads scripts from a CDN, and nothing here needs it
+    app = FastAPI(title="TradeQuery", docs_url=None, redoc_url=None, openapi_url=None)
     root = Path(data_root or data_dir())
     settings = settings or load_settings()
     sessions: OrderedDict[str, Session] = OrderedDict()
     limiter = RateLimiter(MODEL_CALLS_PER_MINUTE)
+    book = usage_book or UsageBook(root)
+    explain_mode = "ai" if os.environ.get("TQ_EXPLAIN", "auto").lower() == "ai" else "auto"
     state: dict = {"provider": None}
+    hosts = allowed_hosts or allowed_hosts_from_env()
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next):
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            origin = request.headers.get("origin")
+            site = request.headers.get("sec-fetch-site")
+            foreign_origin = origin and (urlsplit(origin).hostname or "") not in [h.strip("[]") for h in hosts]
+            if request.headers.get(REQUEST_HEADER) != "1" or foreign_origin or site in ("cross-site", "same-site"):
+                return JSONResponse({"detail": "This request did not come from the TradeQuery page."}, status_code=403)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers.setdefault("Cache-Control", "no-store")  # answers hold account data
+        if request.url.path == "/":
+            response.headers["Content-Security-Policy"] = PAGE_CSP
+        return response
+
+    # added last, so it runs first: a request for another host name is refused before anything else
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
 
     def account_path(login: int) -> Path:
         if login not in db.list_accounts(root):
@@ -244,6 +295,10 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
         except HTTPException as error:
             return {"model": None, "ready": False, "message": error.detail}
 
+    @app.get("/api/usage")
+    def usage_today():
+        return book.today()
+
     @app.get("/api/presets")
     def presets():
         # "needs": basket drawdown questions only make sense on accounts with price bars
@@ -255,13 +310,18 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
     def ask_question(body: AskBody):
         path = account_path(body.login)
         p = provider()
+        over = book.over_budget()
+        if over:
+            raise HTTPException(429, f"{over} It resets at midnight UTC. Suggested questions, the calendar and the "
+                                     "buttons under answers still work, since they need no AI.")
         if not limiter.allow():
             raise HTTPException(429, f"More than {MODEL_CALLS_PER_MINUTE} questions in a minute; wait a moment.")
         session_id = body.session_id or uuid.uuid4().hex
         session = sessions.pop(session_id, None) or Session()
         if session.login is not None and session.login != body.login:
             session = Session()  # follow-ups never cross accounts
-        answer = ask(body.question.strip(), path, settings, p, session)
+        answer = ask(body.question.strip(), path, settings, p, session, explain=explain_mode)
+        book.record(answer.usage, templated=answer.text_source == "template")
         session.login = body.login
         remember(session_id, session)
         return _answer_json(answer, p, session_id, levels_of(body.login))

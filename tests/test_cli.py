@@ -237,7 +237,7 @@ def test_ask_command_with_a_fake_model(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(llm, "provider_from_env", lambda: fake)
     assert cli.main(["--data-dir", str(tmp_path), "ask", "--spec", "longest", "losing", "streak?"]) == 0
     out = capsys.readouterr().out
-    assert "Your longest losing streak was 6 trades." in out and "Spec: {" in out and "2 requests" in out
+    assert "A losing streak of 6 trades" in out and "Spec: {" in out and "1 requests" in out  # a template wrote it
 
 
 def test_sample_command_stores_a_queryable_account(tmp_path, capsys):
