@@ -9,6 +9,11 @@ Call 2 gives the model only the question, the interpretation line, the notes and
 the result table, and asks for a short answer. verify.py checks every number in
 it; one retry on a mismatch, then the table is shown without prose.
 
+Smart mode adds a planning call between the two: the model proposes up to three
+extra QuerySpecs that help explain the result, they run like any other spec, and
+call 2 sees all the tables, writes a "Why:" paragraph and questions worth asking
+next. Every number is still checked, against all the tables.
+
 The model never writes SQL and never sees trade comments or credentials.
 """
 
@@ -181,6 +186,9 @@ class Answer:
     text_source: str | None = None  # "template" (written by code) or "model"
     spec_attempts: int = 0
     usage: Usage = field(default_factory=Usage)
+    smart: bool = False
+    checks: list = field(default_factory=list)  # smart mode: (purpose, spec, result) of each extra check
+    ideas: list[str] = field(default_factory=list)  # smart mode: questions worth asking next
 
 
 def account_context(path, settings: Settings) -> str:
@@ -265,8 +273,8 @@ def _cell_text(column: str, value) -> str:
     return str(value)
 
 
-def _table_text(result: Result) -> str:
-    shown = result.rows[:EXPLAIN_ROWS]
+def _table_text(result: Result, rows: int = EXPLAIN_ROWS) -> str:
+    shown = result.rows[:rows]
     lines = [" | ".join(result.columns)] + [" | ".join(_cell_text(c, v) for c, v in zip(result.columns, r)) for r in shown]
     more = len(result.rows) - len(shown)
     if more > 0:
@@ -333,7 +341,7 @@ def _numbers_in(spec: QuerySpec) -> list[float]:
 
 
 def ask(question: str, path, settings: Settings, provider: Provider, session: Session | None = None, *,
-        explain: str = "auto", on_event=None) -> Answer:
+        explain: str = "auto", on_event=None, smart: bool = False) -> Answer:
     """Answer one question. ``explain``: "auto" writes simple answers from a template, "ai" always asks the model.
 
     ``on_event(kind, **data)``, when given, hears progress as it happens (the page streams it):
@@ -341,9 +349,12 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
       delta  {"text"}   a piece of the written answer, before its numbers are checked
       retry  {"reason"} the written answer failed the number check and is being rewritten
     The model's answer is then streamed; without on_event nothing changes.
+
+    ``smart``: after the main result, the model plans up to three extra checks, and the answer explains why
+    (connecting the tables) and suggests questions worth asking next. About one more model call.
     """
     emit = on_event or (lambda kind, **data: None)
-    answer = Answer(question)
+    answer = Answer(question, smart=smart)
     emit("stage", text="Reading your question")
     context = account_context(path, settings)
     prompt = _spec_prompt(question, context, session)
@@ -389,6 +400,9 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
     spec = answer.spec
     extra_text = [question, result.interpretation, *result.notes]
 
+    if smart:
+        return _smart(answer, question, context, path, settings, provider, emit, stream=on_event is not None)
+
     # A simple result (empty, one row, a plain list) gets a sentence written by code: no second call.
     if explain == "auto":
         text = checked_template(question, spec, result)
@@ -412,17 +426,23 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
                       + "".join(f"Note: {n}\n" for n in result.notes) + f"Result table:\n{table}")
     allowed_rows = result.rows[:EXPLAIN_ROWS]
     extra_numbers = _numbers_in(spec) + ([] if summary else [len(result.rows)]) + ([total] if total else [])
+    return _write(answer, EXPLAIN_SYSTEM, explain_prompt, allowed_rows, extra_numbers, extra_text, provider, emit,
+                  stream=on_event is not None)
+
+
+def _write(answer: Answer, system: str, prompt: str, allowed_rows: list, extra_numbers: list, extra_text: list,
+           provider: Provider, emit, *, stream: bool) -> Answer:
+    """The model writes the answer; every number is checked against the tables, with one retry."""
     problem = None
     emit("stage", text="Writing the answer")
     for attempt in (1, 2):
-        request = explain_prompt if problem is None else (
-            f"{explain_prompt}\n\nYour previous answer used numbers that are not in the table: {', '.join(problem)}. "
+        request = prompt if problem is None else (
+            f"{prompt}\n\nYour previous answer used numbers that are not in the table: {', '.join(problem)}. "
             "Write it again using only numbers from the table.")
         if problem is not None:
             emit("retry", reason="A number in the answer wasn't in your data, so it is being rewritten.")
         try:
-            reply, usage = (_streamed(provider, EXPLAIN_SYSTEM, request, emit) if on_event
-                            else provider.generate(EXPLAIN_SYSTEM, request))
+            reply, usage = (_streamed(provider, system, request, emit) if stream else provider.generate(system, request))
         except LLMError as exc:
             answer.error = f"The result is shown without an explanation ({exc})."
             return answer
@@ -433,4 +453,119 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
             return answer
         problem = check.unsupported
     answer.unsupported_numbers = problem or []
+    return answer
+
+
+# ---- smart mode: extra checks, a "Why", and questions worth asking next ----
+
+MAX_CHECKS = 3
+CHECK_ROWS = 15  # rows of each extra check the writing call sees
+
+PLAN_SYSTEM = SPEC_SYSTEM + """
+PLANNING MODE. This replaces "reply with one QuerySpec". The trader's question was already answered by the main
+spec and result you are given. Plan 1 to 3 extra checks on the same account that would help the trader understand
+WHY the result looks the way it does. Reply with one JSON object only:
+{"checks": [{"purpose": "<at most 8 plain words, no numbers>", "spec": <a QuerySpec>}]}
+Good checks look at the same period or item from another side, for example:
+- a drawdown: the other basis (equity vs balance), equity_curve around its lowest point, stop-outs
+  (close_reason so) or deposits in that window, the trades or baskets inside it, news overlap;
+- a loss or a bad day/hour/symbol: its biggest trades, the session or hour split, news overlap, how it compares
+  with the rest;
+- a streak or tag: the trades in it, what they had in common (symbol, hour, lot size).
+Never repeat the main spec. Prefer small results (a summary, a top 10). Use only the schema above."""
+
+SMART_SYSTEM = """You explain a trader's own MT5 account to them like a careful analyst. You get their question,
+the main result table and up to three extra check tables. Write plain text in exactly this shape:
+1. One or two sentences that answer the question directly.
+2. A short paragraph that starts with "Why:" and connects the tables: what explains the result, and why two
+   numbers that look different can both be right (for example an equity drawdown measured while trades were
+   still open against a balance drawdown measured when they closed, or a deposit made inside a drawdown).
+3. The line "Worth asking next:" then 2 or 3 lines, each starting with "- " and holding one short question the
+   trader could type next about their own data.
+Rules:
+- Every number you write must be in one of the tables. You may round, write a 0-1 share as a percentage, add
+  thousands separators, and drop the minus sign when you say "lost". Do not compute new numbers (no sums,
+  differences, averages or counts of your own).
+- Write dates as YYYY-MM-DD and times as HH:MM.
+- Say "basket", never "sequence". Never write a bare "drawdown": say "account drawdown (equity)", "account
+  drawdown (balance)" or "basket drawdown".
+- News: say a result "overlapped" news, never that news caused it.
+- Describe what the data shows. No trading advice ("you should ..."), no predictions, no markdown, no other
+  headings."""
+
+_NEXT = re.compile(r"^\s*worth asking next:?\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def split_ideas(text: str) -> tuple[str, list[str]]:
+    """The answer text and the questions under "Worth asking next:"."""
+    m = _NEXT.search(text)
+    if not m:
+        return text.strip(), []
+    ideas = [line.strip()[1:].strip() for line in text[m.end():].splitlines() if line.strip().startswith(("-", "*", "•"))]
+    return text[: m.start()].strip(), [i for i in ideas if 3 <= len(i) <= 200][:3]
+
+
+def _section(title: str, spec: QuerySpec, result: Result, rows: int) -> str:
+    interpretation = re.sub(r"^account \d+; ", "", result.interpretation)  # the account number stays here
+    return (f"{title}\nLevel: {level_meaning(spec)}\nInterpretation: {interpretation}\n"
+            + "".join(f"Note: {n}\n" for n in result.notes) + f"Table:\n{_table_text(result, rows)}")
+
+
+def _plan(question: str, context: str, answer: Answer, provider: Provider) -> list[tuple[str, QuerySpec]]:
+    """Up to MAX_CHECKS extra specs from the model; invalid ones are dropped, never retried."""
+    main = answer.spec.model_dump(mode="json", exclude_defaults=True)
+    prompt = (f"{context}\n\nQuestion: {question}\nMain spec: {json.dumps(main)}\n\n"
+              + _section("Main result", answer.spec, answer.result, 10))
+    try:
+        reply, usage = provider.generate(PLAN_SYSTEM, prompt, json_mode=True)
+    except LLMError:
+        return []
+    answer.usage.add(usage)
+    try:
+        items = json.loads(_json_object(reply)).get("checks") or []
+    except (ValueError, AttributeError):
+        return []
+    checks, seen = [], [main]
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict) or not isinstance(item.get("spec"), dict):
+            continue
+        try:
+            spec = parse_spec(json.dumps(item["spec"]))
+        except SpecError:
+            continue
+        dumped = spec.model_dump(mode="json", exclude_defaults=True)
+        if spec.kind != "query" or dumped in seen:
+            continue
+        seen.append(dumped)
+        purpose = re.sub(r"\s+", " ", str(item.get("purpose") or "Extra check")).strip()[:80]
+        checks.append((purpose, spec))
+        if len(checks) == MAX_CHECKS:
+            break
+    return checks
+
+
+def _smart(answer: Answer, question: str, context: str, path, settings: Settings, provider: Provider, emit, *,
+           stream: bool) -> Answer:
+    emit("stage", text="Planning extra checks")
+    planned = _plan(question, context, answer, provider)
+    for i, (purpose, spec) in enumerate(planned, 1):
+        emit("stage", text=f"Check {i} of {len(planned)}: {purpose}")
+        try:
+            answer.checks.append((purpose, spec, execute(spec, path, settings)))
+        except QueryTimeout:
+            continue
+    spec, result = answer.spec, answer.result
+    parts = [f"Question: {question}", _section("Main result", spec, result, EXPLAIN_ROWS)]
+    parts += [_section(f"Extra check {i}: {purpose}", c_spec, c_result, CHECK_ROWS)
+              for i, (purpose, c_spec, c_result) in enumerate(answer.checks, 1)]
+    allowed_rows = result.rows[:EXPLAIN_ROWS] + [r for _, _, c in answer.checks for r in c.rows[:CHECK_ROWS]]
+    extra_numbers = _numbers_in(spec) + [len(result.rows)]
+    extra_text = [question, result.interpretation, *result.notes]
+    for _, c_spec, c_result in answer.checks:
+        extra_numbers += _numbers_in(c_spec) + [len(c_result.rows)]
+        extra_text += [c_result.interpretation, *c_result.notes]
+    _write(answer, SMART_SYSTEM, "\n\n".join(parts), allowed_rows, extra_numbers, extra_text, provider, emit,
+           stream=stream)
+    if answer.text:
+        answer.text, answer.ideas = split_ideas(answer.text)
     return answer

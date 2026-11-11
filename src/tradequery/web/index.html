@@ -90,7 +90,17 @@
                      display: grid; place-items: center; font-size: 14px; font-weight: 700; margin-top: 2px; }
   .msg.bot .bubble { background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow);
                      border-top-left-radius: 6px; width: 100%; max-width: 100%; min-width: 0; }
-  .answer-text { font-size: 15.5px; }
+  .answer-text { font-size: 15.5px; white-space: pre-line; }
+  .smart-toggle { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px;
+                  font-size: 12px; padding: 5px 10px; cursor: pointer; flex: none; align-self: center; }
+  .smart-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .ideas { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .ideas .t { width: 100%; font-size: 12px; color: var(--muted); }
+  .idea { border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 999px; font-size: 13px;
+          padding: 5px 11px; cursor: pointer; text-align: left; }
+  .idea:hover { border-color: var(--accent); }
+  .check { margin-top: 10px; }
+  .check .p { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
   .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; border-radius: 999px;
            padding: 2px 9px; margin-bottom: 6px; }
   .badge.ok { background: var(--good-soft); color: var(--good); }
@@ -289,6 +299,8 @@
     <form class="composer" id="form" autocomplete="off">
       <div class="box">
         <textarea id="question" rows="1" maxlength="500" placeholder="Ask about your trading…" aria-label="Your question"></textarea>
+        <button class="smart-toggle" id="smart" type="button" aria-pressed="false"
+                title="Smart mode: extra checks, why it happened, and what to ask next (about 3 AI calls per question)">Smart</button>
         <button class="send" id="send" type="submit" aria-label="Send" disabled>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </button>
@@ -991,6 +1003,28 @@ function renderAnswer(bubble, data) {
   if (tableBox && !tableBox.hidden) bubble.appendChild(tableBox);
   if (actions.childElementCount) bubble.appendChild(actions);
   if (tableBox && tableBox.hidden) bubble.appendChild(tableBox);
+  if (data.ideas && data.ideas.length && state.modelReady) {
+    const box = el("div", { class: "ideas" });
+    box.appendChild(el("div", { class: "t" }, "Worth asking next"));
+    data.ideas.forEach((idea) => {
+      const b = el("button", { class: "idea", type: "button" }, idea);
+      b.addEventListener("click", () => askTyped(idea, true));
+      box.appendChild(b);
+    });
+    bubble.appendChild(box);
+  }
+  if (data.checks && data.checks.length) {
+    const extra = el("details", { class: "details" });
+    extra.appendChild(el("summary", {}, `Extra checks (${data.checks.length})`));
+    data.checks.forEach((c) => {
+      const box = el("div", { class: "check" });
+      box.append(el("div", { class: "p" }, c.purpose), el("div", { class: "interp" }, c.result.interpretation));
+      c.result.notes.forEach((n) => box.appendChild(el("div", { class: "note" }, n)));
+      box.appendChild(c.result.rows.length ? renderTable(c.result, 8) : el("div", { class: "interp" }, "Nothing matched."));
+      extra.appendChild(box);
+    });
+    bubble.appendChild(extra);
+  }
   const details = el("details", { class: "details" });
   details.appendChild(el("summary", {}, "How this was found"));
   details.appendChild(el("div", { class: "interp" }, r.interpretation));
@@ -1035,9 +1069,12 @@ function ensureChat(firstQuestion) {
   }
   return chat;
 }
+function trimResult(r) {
+  return !r || r.rows.length <= 100 ? r : { ...r, rows: r.rows.slice(0, 100), truncated: true };
+}
 function trimForStorage(data) {
-  if (!data.result || data.result.rows.length <= 100) return data;
-  return { ...data, result: { ...data.result, rows: data.result.rows.slice(0, 100), truncated: true } };
+  return { ...data, result: trimResult(data.result),
+    checks: (data.checks || []).map((c) => ({ ...c, result: trimResult(c.result) })) };
 }
 async function send(question, request) {
   if (state.busy || !state.login) return;
@@ -1119,8 +1156,21 @@ $("form").addEventListener("submit", (e) => {
     return;
   }
   q.value = ""; autosize(); updateSend();
-  send(question, (chat, live) => askStream({ login: state.login, question, session_id: chat.sessionId }, live));
+  askTyped(question, state.smart);
 });
+function askTyped(question, smart) {
+  send(question, (chat, live) => askStream({ login: state.login, question, session_id: chat.sessionId, smart }, live));
+}
+const HINT = $("hint").textContent;
+function setSmart(on) {
+  state.smart = on;
+  $("smart").setAttribute("aria-pressed", String(on));
+  $("hint").textContent = on ? "Smart mode: up to 3 extra checks, why it happened, and what to ask next. About 3 AI calls per question."
+                             : HINT;
+  try { localStorage.setItem("tq-smart", on ? "1" : "0"); } catch { /* private window */ }
+}
+$("smart").addEventListener("click", () => setSmart(!state.smart));
+try { setSmart(localStorage.getItem("tq-smart") === "1"); } catch { setSmart(false); }
 $("newChat").addEventListener("click", () => { state.chatId = null; renderThread(); renderHistory(); closeMenu(); q.focus(); });
 function openMenu() { $("sidebar").classList.add("open"); $("backdrop").classList.add("open"); }
 function closeMenu() { $("sidebar").classList.remove("open"); $("backdrop").classList.remove("open"); }

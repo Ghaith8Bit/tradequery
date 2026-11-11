@@ -91,6 +91,7 @@ class AskBody(BaseModel):
     login: int
     question: str = Field(min_length=1, max_length=500)
     session_id: str | None = Field(default=None, max_length=64)
+    smart: bool = False  # extra checks, a "Why" and questions worth asking next (about one more model call)
 
 
 class PresetBody(BaseModel):
@@ -145,6 +146,10 @@ def _answer_json(answer: Answer, provider: Provider | None, session_id: str | No
                   "output_tokens": answer.usage.output_tokens},
         "model": f"{provider.name} {provider.model}" if provider else None,
         "session_id": session_id,
+        "smart": answer.smart,
+        "checks": [{"purpose": purpose, "spec": spec.model_dump(mode="json", exclude_defaults=True),
+                    "result": _result_json(result)} for purpose, spec, result in answer.checks],
+        "ideas": answer.ideas,
     }
 
 
@@ -375,7 +380,7 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
     @app.post("/api/ask")
     def ask_question(body: AskBody):
         path, p, session_id, session = start_question(body)
-        answer = ask(body.question.strip(), path, settings, p, session, explain=explain_mode)
+        answer = ask(body.question.strip(), path, settings, p, session, explain=explain_mode, smart=body.smart)
         return finish_question(body, answer, p, session_id, session)
 
     @app.post("/api/ask/stream")
@@ -396,7 +401,8 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
 
         def work() -> None:
             try:
-                answer = ask(body.question.strip(), path, settings, p, session, explain=explain_mode, on_event=emit)
+                answer = ask(body.question.strip(), path, settings, p, session, explain=explain_mode, on_event=emit,
+                             smart=body.smart)
                 emit("done", answer=finish_question(body, answer, p, session_id, session))
             except Exception:  # noqa: BLE001 - the page gets a short message; the log gets the details
                 logging.getLogger("tradequery").exception("streamed question failed")
