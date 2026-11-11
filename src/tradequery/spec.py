@@ -59,10 +59,11 @@ ENTITIES: dict[str, Entity] = {
         "v_sequences", "start_utc",
         dict(sequence_id="int", type="text", symbol="text", side="text", depth="int", first_lot="num",
              max_lot="num", max_lot_multiplier="num", max_open="int", start_utc="time", end_utc="time",
-             net_pnl="num", is_win="bool", news_overlap="bool"),
+             net_pnl="num", is_win="bool", news_overlap="bool", drawdown_abs="num", drawdown_pct="num",
+             drawdown_time_utc="time", equity_at_start="num"),
         ("type", "symbol", "side", "depth", "is_win", "news_overlap"),
         ("sequence_id", "type", "symbol", "side", "depth", "first_lot", "max_lot", "max_lot_multiplier",
-         "start_utc", "end_utc", "net_pnl", "is_win"),
+         "start_utc", "end_utc", "net_pnl", "is_win", "drawdown_abs", "drawdown_pct"),
     ),
     "streaks": Entity(
         "streaks", "start_utc",
@@ -212,7 +213,9 @@ class QuerySpec(BaseModel):
             else:
                 if a.field is None:
                     raise ValueError(f"aggregations: {a.func} needs a field")
-                if check_field(a.field, "aggregations") not in ("num", "int"):
+                kind = check_field(a.field, "aggregations")
+                # avg of a true/false field is the share that is true (a win rate per basket)
+                if kind not in ("num", "int") and not (kind == "bool" and a.func == "avg"):
                     raise ValueError(f"aggregations: {a.func} needs a number field, {a.field!r} is not one")
             aliases.add(a.alias)
         if self.aggregations and self.fields:

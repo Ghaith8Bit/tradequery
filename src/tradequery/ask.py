@@ -24,6 +24,7 @@ from .detectors import RULES
 from .examples import EXAMPLES
 from .execute import QueryTimeout, Result, execute
 from .llm import LLMError, Provider, Usage
+from .scope import level_meaning
 from .settings import Settings
 from .spec import ENTITIES, MAX_ROWS, METRIC_DEFINITIONS, OPERATORS, QuerySpec, SpecError, parse_spec
 from .verify import check_numbers
@@ -80,8 +81,17 @@ Values and conventions:
 - Symbols: filter canonical_symbol with the names listed in the account context (gold = XAUUSD).
 - weekday: Mon Tue Wed Thu Fri Sat Sun. hour: 0-23. month: "YYYY-MM". All three are broker server time.
 - side: buy or sell. outcome: win, loss or breakeven. Money amounts are in the account currency.
-- Sequences: type martingale, grid or martingale_grid. Streaks: type win or loss. Drawdown episodes: basis balance
-  (closed trades) or equity (with open positions). cash_flows type: deposit, withdrawal, credit, bonus, correction, charge.
+- Sequences (the trader calls them baskets): type martingale, grid or martingale_grid. Streaks: type win or loss.
+  Drawdown episodes: basis balance (closed trades) or equity (with open positions). cash_flows type: deposit,
+  withdrawal, credit, bonus, correction, charge.
+- Level: first decide whether the question is about the whole account, baskets or single trades. "Basket" (also
+  "series", "martingale/grid run") means entity sequences, one row per basket; "trade", "position" or "order"
+  means trades. Counts, win rates and averages "per basket" are computed on sequences (count, avg of is_win as
+  win_rate, avg or sum of net_pnl), never on trades.
+- Basket drawdown: how far a basket went into the red before it closed is sequences.drawdown_abs (money) and
+  drawdown_pct (a share of account equity when the basket opened: 0.6 = 60%; null without price bars). "Baskets
+  that went to -60%" means drawdown_pct gte 0.6. A plain "drawdown" without "basket" is the account drawdown
+  (drawdown_episodes).
 - Drawdown basis: when a question does not say balance or equity, use the "Drawdown default" from the account
   context. On an equity account, "maximum drawdown" is the deepest equity episode (drawdown_episodes, basis
   equity, order depth_abs desc, limit 1), not the max_drawdown metric, which counts closed trades only.
@@ -123,6 +133,11 @@ using only the result table you are given.
   averages or counts of your own).
 - Write dates as YYYY-MM-DD and times as HH:MM.
 - If the table is empty, say that nothing matched. If a note says trades were left out, mention it.
+- Start with what was counted, as the Level line says: "Across 12 baskets ...", "Your account drawdown (equity)
+  ...", "Of the 76 trades ...", "Across your trades ...". A count must be a count column in the table or the
+  Rows number; with no Rows line, the table is a summary: state no count unless a count column shows one.
+- Say "basket", never "sequence". Never write a bare "drawdown": say "account drawdown (equity)", "account
+  drawdown (balance)" or "basket drawdown", as the Level line and the columns show.
 - News: say a result "overlapped" news, never that news caused it.
 - No advice, no predictions, no lists or headings. Plain text only."""
 
@@ -240,6 +255,18 @@ def _table_text(result: Result) -> str:
     return "\n".join(lines)
 
 
+_WORDS = [(re.compile(r"\bsequences\b"), "baskets"), (re.compile(r"\bSequences\b"), "Baskets"),
+          (re.compile(r"\bsequence\b"), "basket"), (re.compile(r"\bSequence\b"), "Basket"),
+          (re.compile(r"\b1 (basket|trade|drawdown)s\b"), r"1 \1")]
+
+
+def plain_words(text: str) -> str:
+    """The trader's words in an answer: baskets, never sequences; "1 basket", not "1 baskets". Numbers are untouched."""
+    for pattern, repl in _WORDS:
+        text = pattern.sub(repl, text)
+    return text
+
+
 def _numbers_in(spec: QuerySpec) -> list[float]:
     out: list[float] = [spec.limit] if spec.limit else []
     for f in [*spec.filters, *(f for c in spec.compare for f in c.filters)]:
@@ -292,10 +319,16 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
     # Call 2: result -> short answer, every number checked, one retry
     result = answer.result
     table = _table_text(result)
-    explain = (f"Question: {question}\nInterpretation: {result.interpretation}\n"
+    spec = answer.spec
+    # The row count is a count of things only for a plain list (or of groups); a summary row is not "1 trade".
+    summary = (spec.metrics or spec.aggregations) and not spec.group_by and not spec.compare
+    rows_line = "" if summary else (f"Rows: {len(result.rows)} groups\n" if spec.group_by or spec.compare
+                                    else f"Rows: {len(result.rows)}, each one listed item\n")
+    explain = (f"Question: {question}\nLevel: {level_meaning(spec)}\n{rows_line}"
+               f"Interpretation: {result.interpretation}\n"
                + "".join(f"Note: {n}\n" for n in result.notes) + f"Result table:\n{table}")
     allowed_rows = result.rows[:EXPLAIN_ROWS]
-    extra_numbers = _numbers_in(answer.spec) + [len(result.rows)]
+    extra_numbers = _numbers_in(spec) + ([] if summary else [len(result.rows)])
     extra_text = [question, result.interpretation, *result.notes]
     problem = None
     for attempt in (1, 2):
@@ -310,7 +343,7 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
         answer.usage.add(usage)
         check = check_numbers(reply, allowed_rows, extra_numbers=extra_numbers, extra_text=extra_text)
         if check.ok:
-            answer.text, answer.verified = reply.strip(), True
+            answer.text, answer.verified = plain_words(reply.strip()), True
             return answer
         problem = check.unsupported
     answer.unsupported_numbers = problem or []

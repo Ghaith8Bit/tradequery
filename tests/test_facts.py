@@ -1,5 +1,6 @@
 """Derived layers stored for querying: they must agree with the modules that compute them."""
 
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from tradequery import db, metrics
@@ -76,7 +77,49 @@ def test_trades_link_to_their_equity_drawdown(tmp_path):
         linked = conn.execute("SELECT COUNT(*) FROM v_trades WHERE equity_drawdown_episode_id = ?",
                               (episode_id,)).fetchone()[0]
         assert linked == trade_count
+
+    # every basket now has a drawdown: at least its final loss, since its running result ends at its net
+    baskets = conn.execute("SELECT sequence_id, net_pnl, drawdown_abs, drawdown_pct, equity_at_start "
+                           "FROM v_sequences").fetchall()
+    assert baskets and all(b["drawdown_abs"] is not None for b in baskets)
+    for b in baskets:
+        assert b["drawdown_abs"] >= max(0.0, -b["net_pnl"]) - 0.01
+        assert b["drawdown_pct"] == round(b["drawdown_abs"] / b["equity_at_start"], 4)
     conn.close()
+
+
+def test_basket_drawdown_counts_closed_and_open_legs():
+    from datetime import timedelta
+
+    from tradequery.detectors.sequences import Sequence
+    from tradequery.models import Bar
+    from tradequery.pricepath import basket_drawdowns
+
+    t0 = datetime(2026, 1, 5, 10, 0, tzinfo=timezone.utc)
+    template = next(t for t in stored_trades() if t.symbol == "XAUUSD")
+    # two buys of 1 lot at 100 (100 money per 1.0 move); leg a closes at 95 (-500) at 10:03:30, leg b at 104 (+400)
+    a = replace(template, position_id=1, side="buy", lots=1.0, open_price=100.0, open_time_utc=t0,
+                close_time_utc=t0 + timedelta(minutes=3, seconds=30), close_price=95.0, net_profit=-500.0)
+    b = replace(template, position_id=2, side="buy", lots=1.0, open_price=100.0, open_time_utc=t0,
+                close_time_utc=t0 + timedelta(minutes=6), close_price=104.0, net_profit=400.0)
+    closes = [99, 95, 90, 92, 98, 104, 104]
+    bars = {"XAUUSD": [Bar("XAUUSD", t0 + timedelta(minutes=i), c, c, c, c, 0) for i, c in enumerate(closes)]}
+    seq = Sequence(7, "grid", "XAUUSD", "buy", (1, 2), 1.0, 1.0, 2, t0, t0 + timedelta(minutes=6), -100.0)
+    [dd] = basket_drawdowns([seq], [a, b], bars, symbol_specs={"XAUUSD": {"tick_value": 100.0, "tick_size": 1.0}},
+                            covered={1, 2}, opening_balance=4000.0)
+    # at 10:03 (bar 10:02 closed at 90): both legs open, (90 - 100) * 100 * 2 = -2,000; at 10:04 leg a is closed
+    # at -500 and leg b at 92 is -800, together -1,300. The deepest is -2,000, half of the 4,000 the account had.
+    assert (dd.depth_abs, dd.time_utc, dd.equity_at_start, dd.depth_pct) == (2000.0, t0 + timedelta(minutes=3), 4000.0, 0.5)
+
+
+def stored_trades():
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        conn, trades, _ = stored(Path(tmp))
+        conn.close()
+    return trades
 
 
 def test_views_answer_simple_questions(tmp_path):

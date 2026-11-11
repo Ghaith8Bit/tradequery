@@ -39,6 +39,12 @@ def build_overview(path: Path, settings: Settings) -> dict:
         no_stop = conn.execute("SELECT COUNT(*) FROM tags WHERE rule = 'no_stop_loss'").fetchone()[0]
         equity_dd = conn.execute("SELECT depth_abs, depth_pct FROM drawdown_episodes WHERE basis = 'equity' "
                                  "ORDER BY depth_abs DESC LIMIT 1").fetchone()
+        # basket drawdown (needs price bars): the deepest basket, and the deepest one that still closed in profit
+        worst_basket = conn.execute("SELECT sequence_id, drawdown_abs, drawdown_pct, is_win FROM v_sequences "
+                                    "WHERE drawdown_pct IS NOT NULL ORDER BY drawdown_pct DESC LIMIT 1").fetchone()
+        worst_winner = conn.execute("SELECT sequence_id, drawdown_abs, drawdown_pct FROM v_sequences "
+                                    "WHERE is_win = 1 AND drawdown_pct IS NOT NULL ORDER BY drawdown_pct DESC "
+                                    "LIMIT 1").fetchone()
     finally:
         conn.close()
 
@@ -64,6 +70,10 @@ def build_overview(path: Path, settings: Settings) -> dict:
         "deepest_sequence": ({"depth": deepest[0], "multiplier": deepest[1], "net": deepest[2], "start": deepest[3],
                                   "id": deepest[4]}
                              if deepest else None),
+        "worst_basket": ({"id": worst_basket[0], "drawdown": worst_basket[1], "drawdown_pct": worst_basket[2],
+                          "is_win": bool(worst_basket[3])} if worst_basket else None),
+        "worst_winning_basket": ({"id": worst_winner[0], "drawdown": worst_winner[1], "drawdown_pct": worst_winner[2]}
+                                 if worst_winner else None),
     }
     curve = [(db.format_time(t.close_time_utc), t.balance_after) for t in trades if t.balance_after is not None]
     out["balance_curve"] = _downsample(curve, CURVE_POINTS)
@@ -81,13 +91,21 @@ def build_overview(path: Path, settings: Settings) -> dict:
         facts.append({"level": "warn", "text": f"{stop_outs} positions were closed by a stop-out."})
     if deep_count and deep_count[0]:
         won = deep_count[1] or 0
-        facts.append({"level": "warn", "text": f"{deep_count[0]} martingale or grid sequences went 6 or more levels "
+        facts.append({"level": "warn", "text": f"{deep_count[0]} baskets (martingale or grid) went 6 or more levels "
                                                f"deep; {won} of them closed in profit."})
+    if worst_basket and worst_basket[2] >= 0.3:
+        facts.append({"level": "warn", "text": f"Basket drawdown: the deepest basket went {worst_basket[2] * 100:.1f}% "
+                                               f"of equity into the red before it closed"
+                                               + (" in profit." if worst_basket[3] else ".")})
+    if worst_winner and worst_winner[2] > 0 and (not worst_basket or worst_winner[0] != worst_basket[0]):
+        facts.append({"level": "info", "text": f"Basket drawdown: the deepest winning basket went "
+                                               f"{worst_winner[2] * 100:.1f}% of equity into the red before closing "
+                                               "in profit."})
     if equity_dd and equity_dd[1] is not None and equity_dd[1] >= 0.5:
-        facts.append({"level": "warn", "text": f"The deepest equity drawdown (open positions counted) took "
+        facts.append({"level": "warn", "text": f"Account drawdown (equity): the deepest, open positions counted, took "
                                                f"{equity_dd[1] * 100:.1f}% of the money at stake."})
     elif not equity_dd and m["max_drawdown_pct"] is not None and m["max_drawdown_pct"] >= 0.5:
-        facts.append({"level": "warn", "text": f"The deepest balance drawdown took {m['max_drawdown_pct'] * 100:.1f}% "
+        facts.append({"level": "warn", "text": f"Account drawdown (balance): the deepest took {m['max_drawdown_pct'] * 100:.1f}% "
                                                "of the money at stake."})
     out["facts"] = facts
     return out

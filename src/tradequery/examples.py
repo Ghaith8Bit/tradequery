@@ -109,7 +109,20 @@ EXAMPLES: list[tuple[str, dict]] = [
         "filters": [{"field": "tags", "op": "eq", "value": "revenge_trade"}],
         "order_by": [{"field": "open_time_utc", "direction": "asc"}],
     }),
-    ("Show winning martingale sequences during news.", {
+    ("Which winning baskets went more than 20% down before closing in profit?", {
+        "entity": "sequences",
+        "filters": [{"field": "is_win", "op": "eq", "value": True},
+                    {"field": "drawdown_pct", "op": "gte", "value": 0.2}],
+        "order_by": [{"field": "drawdown_pct", "direction": "desc"}],
+    }),
+    ("What is my win rate per basket, and how deep do baskets go on average?", {
+        "entity": "sequences",
+        "aggregations": [{"func": "count", "alias": "baskets"},
+                         {"func": "avg", "field": "is_win", "alias": "win_rate"},
+                         {"func": "avg", "field": "drawdown_pct", "alias": "avg_drawdown_pct"},
+                         {"func": "max", "field": "drawdown_pct", "alias": "max_drawdown_pct"}],
+    }),
+    ("Show winning martingale baskets during news.", {
         "entity": "sequences",
         "filters": [{"field": "type", "op": "in", "value": ["martingale", "martingale_grid"]},
                     {"field": "is_win", "op": "eq", "value": True},

@@ -167,7 +167,7 @@ def test_winning_martingales_during_news(tmp_path):
         db.save_account(conn, {"login": 7, "balance": 0.0}, earliest_history=None, synced_at=datetime.now(timezone.utc))
         trades, _ = db.rebuild_derived(conn, SETTINGS)
     conn.close()
-    spec = SPECS["Show winning martingale sequences during news."]
+    spec = SPECS["Show winning martingale baskets during news."]
     assert ask(path, spec).rows == []  # no calendar: nothing overlapped news
     planted = min((t for t in trades if t.comment.startswith("martingale-")), key=lambda t: t.open_time_utc)
     conn = db.connect(path)

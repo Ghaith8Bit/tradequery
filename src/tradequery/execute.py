@@ -68,7 +68,9 @@ def _describe(spec: QuerySpec, login: int, settings: Settings) -> str:
         symbol = {"eq": "=", "ne": "!=", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "in": "in"}[f.op]
         return f"{f.field} {symbol} {f.value}"
 
-    parts = [f"account {login}", spec.entity]
+    from .scope import level_label  # scope imports this module
+
+    parts = [f"account {login}", f"{level_label(spec).lower()} ({spec.entity})"]
     if spec.filters:
         parts.append("where " + " and ".join(f_text(f) for f in spec.filters))
     tz = spec.time_range.timezone if spec.time_range else "server"

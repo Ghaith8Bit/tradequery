@@ -9,7 +9,7 @@ kind of number; it gathers what the other modules already compute.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from . import exposure as exposure_mod
@@ -88,6 +88,7 @@ class Facts:
     episodes: list[EpisodeRow]
     exposure: list[exposure_mod.ExposureEvent]
     equity: list[pricepath.EquityPoint]
+    baskets: list[pricepath.BasketDrawdown] = field(default_factory=list)  # needs one-minute bars
 
 
 def _episode_rows(episodes, basis, start_id, trades, by_pid, links, first_time, last_time) -> list[EpisodeRow]:
@@ -186,4 +187,7 @@ def build(
             news_overlap=t.position_id in news_hit,
             equity_drawdown_episode_id=equity_of.get(t.position_id),
         ))
-    return Facts(facts, streak_rows, episodes, exposure_mod.exposure_events(trades), curve)
+    baskets = pricepath.basket_drawdowns(
+        sequences, trades, bars, symbol_specs=specs, covered=set(paths), cash_flows=cash_flows, curve=curve,
+        opening_balance=opening_balance) if paths else []
+    return Facts(facts, streak_rows, episodes, exposure_mod.exposure_events(trades), curve, baskets)

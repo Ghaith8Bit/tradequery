@@ -7,6 +7,7 @@ from tradequery.synthetic import generate_account
 from tradequery import db
 from tradequery.settings import load_settings
 from tradequery import cli
+from tradequery.examples import EXAMPLES
 
 
 def write_account(root, login, balance):
@@ -213,7 +214,7 @@ def test_query_command(tmp_path, capsys):
     write_account(tmp_path, 1234, balance=balance_from_deals(generate_account().deals))
     assert cli.main(["--data-dir", str(tmp_path), "query", "--examples", "all"]) == 0
     out = capsys.readouterr().out
-    assert out.count("Q: ") == 14 and "Interpretation:" in out
+    assert out.count("Q: ") == len(EXAMPLES) and "Interpretation:" in out
     assert cli.main(["--data-dir", str(tmp_path), "query", "{\"entity\": \"streaks\", \"limit\": 2}", "--sql"]) == 0
     assert "SQL: SELECT" in capsys.readouterr().out
     assert cli.main(["--data-dir", str(tmp_path), "query", "{\"entity\": \"trades\", \"filters\": [{\"field\": \"comment\", \"op\": \"eq\", \"value\": \"x\"}]}"]) == 2

@@ -33,7 +33,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from . import db, syncjobs
-from .ask import Answer, Session, ask, drawdown_default, is_share_column
+from .ask import Answer, Session, _found_ids, ask, drawdown_default, is_share_column
 from .evaluate import EVAL_LOGIN as SAMPLE_LOGIN
 from .examples import EXAMPLES, with_drawdown_basis
 from .execute import QueryTimeout, Result, execute
@@ -42,6 +42,7 @@ from .ingest import import_report
 from .llm import LLMError, Provider, provider_from_env
 from .overview import build_overview
 from .pricechart import NotFound, sequence_chart, trade_chart
+from .scope import GROUPS, account_levels, describe
 from .settings import Settings, data_dir, load_settings
 from .spec import SpecError, parse_spec
 
@@ -60,11 +61,14 @@ class AskBody(BaseModel):
 class PresetBody(BaseModel):
     login: int
     number: int = Field(ge=1)
+    session_id: str | None = Field(default=None, max_length=64)
 
 
 class QueryBody(BaseModel):
     login: int
     spec: dict
+    question: str | None = Field(default=None, max_length=500)  # shown in the chat (switch buttons)
+    session_id: str | None = Field(default=None, max_length=64)  # so a follow-up continues from this answer
 
 
 def _result_json(result: Result | None) -> dict | None:
@@ -81,8 +85,13 @@ def _result_json(result: Result | None) -> dict | None:
     }
 
 
-def _answer_json(answer: Answer, provider: Provider | None, session_id: str | None) -> dict:
+def _answer_json(answer: Answer, provider: Provider | None, session_id: str | None, levels: dict | None = None,
+                 model_ready: bool = True) -> dict:
+    levels = levels or {}
     return {
+        "scope": describe(answer.spec, answer.result, has_equity=levels.get("has_equity", False),
+                          has_baskets=levels.get("has_baskets", False), model_ready=model_ready,
+                          question=answer.question),
         "question": answer.question,
         "kind": answer.spec.kind if answer.spec else None,
         "text": answer.text,
@@ -127,6 +136,25 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
         if login not in db.list_accounts(root):
             raise HTTPException(404, f"no stored account {login}")
         return db.db_path(login, root)
+
+    def levels_of(login: int) -> dict:
+        conn = db.connect(account_path(login), read_only=True)
+        try:
+            return account_levels(conn)
+        finally:
+            conn.close()
+
+    def model_ready() -> bool:
+        try:
+            provider()
+            return True
+        except HTTPException:
+            return False
+
+    def remember(session_id: str, session: Session) -> None:
+        sessions[session_id] = session
+        while len(sessions) > MAX_SESSIONS:
+            sessions.popitem(last=False)
 
     def provider() -> Provider:
         if state["provider"] is None:
@@ -217,7 +245,10 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
 
     @app.get("/api/presets")
     def presets():
-        return [{"number": i, "question": q} for i, (q, _) in enumerate(EXAMPLES, start=1)]
+        # "needs": basket drawdown questions only make sense on accounts with price bars
+        return [{"number": i, "question": q, "group": GROUPS.get(s.get("entity"), "Trades"),
+                 "needs": "basket_drawdown" if "drawdown" in str(s) and s.get("entity") == "sequences" else None}
+                for i, (q, s) in enumerate(EXAMPLES, start=1)]
 
     @app.post("/api/ask")
     def ask_question(body: AskBody):
@@ -231,12 +262,10 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
             session = Session()  # follow-ups never cross accounts
         answer = ask(body.question.strip(), path, settings, p, session)
         session.login = body.login
-        sessions[session_id] = session
-        while len(sessions) > MAX_SESSIONS:
-            sessions.popitem(last=False)
-        return _answer_json(answer, p, session_id)
+        remember(session_id, session)
+        return _answer_json(answer, p, session_id, levels_of(body.login))
 
-    def run_spec(login: int, spec_data: dict, question: str) -> dict:
+    def run_spec(login: int, spec_data: dict, question: str, session_id: str | None = None) -> dict:
         path = account_path(login)
         try:
             spec = parse_spec(spec_data)
@@ -249,7 +278,16 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
             answer.error = str(error)
         if spec.kind != "query":
             answer.text = spec.message
-        return _answer_json(answer, None, None)
+        if session_id and answer.result is not None:
+            # a switch button keeps the conversation going: the next follow-up starts from this answer
+            session = sessions.pop(session_id, None) or Session()
+            if session.login not in (None, login):
+                session = Session()
+            session.login, session.question = login, question
+            session.spec = spec.model_dump(mode="json", exclude_defaults=True)
+            session.found = _found_ids(answer.result)
+            remember(session_id, session)
+        return _answer_json(answer, None, session_id, levels_of(login), model_ready())
 
     @app.post("/api/preset")
     def preset(body: PresetBody):
@@ -261,11 +299,12 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
             basis = drawdown_default(conn)
         finally:
             conn.close()
-        return run_spec(body.login, with_drawdown_basis(spec, basis), question)
+        return run_spec(body.login, with_drawdown_basis(spec, basis), question, body.session_id or uuid.uuid4().hex)
 
     @app.post("/api/query")
     def query(body: QueryBody):
-        return run_spec(body.login, body.spec, "(hand-written spec)")
+        session_id = body.session_id or (uuid.uuid4().hex if body.question else None)
+        return run_spec(body.login, body.spec, body.question or "(hand-written spec)", session_id)
 
     return app
 

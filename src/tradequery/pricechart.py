@@ -99,9 +99,9 @@ def trade_chart(path: Path, position_id: int) -> dict:
 def sequence_chart(path: Path, sequence_id: int) -> dict:
     conn = db.connect(path, read_only=True)
     try:
-        seq = conn.execute("SELECT * FROM sequences WHERE sequence_id = ?", (sequence_id,)).fetchone()
+        seq = conn.execute("SELECT * FROM v_sequences WHERE sequence_id = ?", (sequence_id,)).fetchone()
         if seq is None:
-            raise NotFound(f"no sequence {sequence_id}")
+            raise NotFound(f"no basket {sequence_id}")
         ids = [r[0] for r in conn.execute(
             "SELECT position_id FROM sequence_trades WHERE sequence_id = ? ORDER BY level", (sequence_id,))]
         trades = [_trade_row(conn, p) for p in ids]
