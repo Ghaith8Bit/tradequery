@@ -288,6 +288,18 @@ def plain_words(text: str) -> str:
     return text
 
 
+def _streamed(provider: Provider, system: str, prompt: str, emit) -> tuple[str, Usage]:
+    """Call the model with streaming, passing each piece on as a "delta" event; returns the whole reply."""
+    pieces, usage = [], Usage()
+    for item in provider.stream(system, prompt):
+        if isinstance(item, Usage):
+            usage = item
+        else:
+            pieces.append(item)
+            emit("delta", text=item)
+    return "".join(pieces), usage
+
+
 def checked_template(question: str, spec: QuerySpec, result: Result) -> str | None:
     """The code-written sentence for a simple result, only if every number in it checks out (else None)."""
     text = template_answer(spec, result, question)
@@ -321,12 +333,20 @@ def _numbers_in(spec: QuerySpec) -> list[float]:
 
 
 def ask(question: str, path, settings: Settings, provider: Provider, session: Session | None = None, *,
-        explain: str = "auto") -> Answer:
-    """Answer one question. ``explain``: "auto" writes simple answers from a template, "ai" always asks the model."""
+        explain: str = "auto", on_event=None) -> Answer:
+    """Answer one question. ``explain``: "auto" writes simple answers from a template, "ai" always asks the model.
+
+    ``on_event(kind, **data)``, when given, hears progress as it happens (the page streams it):
+      stage  {"text"}   a step starts ("Reading your question", "Writing the answer")
+      delta  {"text"}   a piece of the written answer, before its numbers are checked
+      retry  {"reason"} the written answer failed the number check and is being rewritten
+    The model's answer is then streamed; without on_event nothing changes.
+    """
+    emit = on_event or (lambda kind, **data: None)
     answer = Answer(question)
+    emit("stage", text="Reading your question")
     context = account_context(path, settings)
     prompt = _spec_prompt(question, context, session)
-    # a follow-up ("only gold") picks its examples with the question it refines
 
     # Call 1: question -> spec, one retry with the validation error
     error = None
@@ -355,6 +375,7 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
         answer.verified = True
         return answer
 
+    emit("stage", text="Looking it up in your data")
     try:
         answer.result = execute(answer.spec, path, settings)
     except QueryTimeout as exc:
@@ -392,12 +413,16 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
     allowed_rows = result.rows[:EXPLAIN_ROWS]
     extra_numbers = _numbers_in(spec) + ([] if summary else [len(result.rows)]) + ([total] if total else [])
     problem = None
+    emit("stage", text="Writing the answer")
     for attempt in (1, 2):
         request = explain_prompt if problem is None else (
             f"{explain_prompt}\n\nYour previous answer used numbers that are not in the table: {', '.join(problem)}. "
             "Write it again using only numbers from the table.")
+        if problem is not None:
+            emit("retry", reason="A number in the answer wasn't in your data, so it is being rewritten.")
         try:
-            reply, usage = provider.generate(EXPLAIN_SYSTEM, request)
+            reply, usage = (_streamed(provider, EXPLAIN_SYSTEM, request, emit) if on_event
+                            else provider.generate(EXPLAIN_SYSTEM, request))
         except LLMError as exc:
             answer.error = f"The result is shown without an explanation ({exc})."
             return answer

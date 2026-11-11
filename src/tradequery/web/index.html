@@ -228,6 +228,8 @@
   .card.skeleton.tall { height: 250px; border-color: transparent; box-shadow: none; }
   .thinking { display: grid; gap: 8px; padding: 4px 0; }
   .thinking .t { font-size: 13px; color: var(--muted); }
+  .thinking .live { white-space: pre-wrap; }
+  .thinking .badge { justify-self: start; }
   .sk-line { height: 10px; border-radius: 6px; } .sk-line.w80 { width: 80%; } .sk-line.w55 { width: 55%; }
   @media (prefers-reduced-motion: reduce) { .skeleton, .sk-line, .typing span, .spin { animation: none; } }
 
@@ -334,6 +336,36 @@ async function api(path, body) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
   return data;
+}
+// A typed question, streamed: progress and the answer's words arrive as they are written.
+// live.stage(text), live.delta(text) and live.retry(reason) show them; the result is the same JSON as /api/ask.
+async function askStream(body, live) {
+  const res = await fetch("/api/ask/stream", { method: "POST", headers: { "Content-Type": "application/json", "X-TradeQuery": "1" }, body: JSON.stringify(body) });
+  if (res.status === 401) { location.reload(); throw new Error("Sign in first."); }
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    let cut;
+    while ((cut = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, cut).trim();
+      buffer = buffer.slice(cut + 1);
+      if (!line) continue;
+      const msg = JSON.parse(line);
+      if (msg.event === "done") return msg.answer;
+      if (msg.event === "error") throw new Error(msg.detail);
+      if (msg.event === "stage") live.stage(msg.text);
+      else if (msg.event === "delta") live.delta(msg.text);
+      else if (msg.event === "retry") live.retry(msg.reason);
+    }
+    if (done) throw new Error("The answer stopped early. Try again.");
+  }
 }
 const fmt2 = new Intl.NumberFormat(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmt0 = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
@@ -890,7 +922,7 @@ function runSwitch(s) {
   if (s.kind === "spec") {
     send(s.question, (chat) => api("/api/query", { login: state.login, spec: s.spec, question: s.question, session_id: chat.sessionId }));
   } else {
-    send(s.question, (chat) => api("/api/ask", { login: state.login, question: s.question, session_id: chat.sessionId }));
+    send(s.question, (chat, live) => askStream({ login: state.login, question: s.question, session_id: chat.sessionId }, live));
   }
 }
 function renderAnswer(bubble, data) {
@@ -1018,14 +1050,32 @@ async function send(question, request) {
   t.appendChild(userMessage(question));
   const [box, bubble] = botShell();
   const typing = el("div", { class: "thinking", role: "status" });
-  typing.append(el("div", { class: "t" }, "Reading your trades…"), el("div", { class: "sk-line w80" }), el("div", { class: "sk-line w55" }));
+  const stageLine = el("div", { class: "t" }, "Reading your trades…");
+  const skeleton = [el("div", { class: "sk-line w80" }), el("div", { class: "sk-line w55" })];
+  typing.append(stageLine, ...skeleton);
   bubble.appendChild(typing);
+  let liveText = null;
+  const live = {  // only streamed questions call these
+    stage(text) { stageLine.textContent = text + "…"; },
+    delta(text) {
+      if (!liveText) {
+        skeleton.forEach((n) => n.remove());
+        liveText = el("div", { class: "answer-text live" });
+        typing.append(liveText, el("span", { class: "badge info" }, "Checking the numbers when it finishes"));
+      }
+      liveText.textContent += text;
+    },
+    retry(reason) {
+      if (liveText) liveText.textContent = "";
+      stageLine.textContent = reason;
+    },
+  };
   t.appendChild(box);
   box.scrollIntoView({ behavior: "smooth", block: "end" });
   renderHistory();
   let data;
   try {
-    data = await request(chat);
+    data = await request(chat, live);
     if (data.session_id) chat.sessionId = data.session_id;
   } catch (error) {
     data = { error: error.message, result: null, text: null };
@@ -1069,7 +1119,7 @@ $("form").addEventListener("submit", (e) => {
     return;
   }
   q.value = ""; autosize(); updateSend();
-  send(question, (chat) => api("/api/ask", { login: state.login, question, session_id: chat.sessionId }));
+  send(question, (chat, live) => askStream({ login: state.login, question, session_id: chat.sessionId }, live));
 });
 $("newChat").addEventListener("click", () => { state.chatId = null; renderThread(); renderHistory(); closeMenu(); q.focus(); });
 function openMenu() { $("sidebar").classList.add("open"); $("backdrop").classList.add("open"); }

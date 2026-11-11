@@ -5,6 +5,7 @@
   GET  /api/status        is a language model configured, and which
   GET  /api/presets       the plan's example questions (answered without the model)
   POST /api/ask           a plain-English question, with a session id for follow-ups
+  POST /api/ask/stream    the same, streamed as it happens (newline-delimited JSON events)
   POST /api/preset        one example question, by number: no model call, instant
   POST /api/query         a hand-written QuerySpec
   GET  /api/overview      the start screen: key numbers, two charts, risk facts
@@ -35,6 +36,9 @@ that needs TQ_PASSWORD too, and then every request needs a signed-in browser (au
 
 from __future__ import annotations
 
+import asyncio
+import json
+import logging
 import os
 import tempfile
 import time
@@ -44,7 +48,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -345,8 +350,8 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
                  "needs": "basket_drawdown" if "drawdown" in str(s) and s.get("entity") == "sequences" else None}
                 for i, (q, s) in enumerate(EXAMPLES, start=1)]
 
-    @app.post("/api/ask")
-    def ask_question(body: AskBody):
+    def start_question(body: AskBody):
+        """Checks before any model call (account, budget, rate), and the conversation to continue."""
         path = account_path(body.login)
         p = provider()
         over = book.over_budget()
@@ -359,11 +364,53 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
         session = sessions.pop(session_id, None) or Session()
         if session.login is not None and session.login != body.login:
             session = Session()  # follow-ups never cross accounts
-        answer = ask(body.question.strip(), path, settings, p, session, explain=explain_mode)
+        return path, p, session_id, session
+
+    def finish_question(body: AskBody, answer: Answer, p: Provider, session_id: str, session: Session) -> dict:
         book.record(answer.usage, templated=answer.text_source == "template")
         session.login = body.login
         remember(session_id, session)
         return _answer_json(answer, p, session_id, levels_of(body.login))
+
+    @app.post("/api/ask")
+    def ask_question(body: AskBody):
+        path, p, session_id, session = start_question(body)
+        answer = ask(body.question.strip(), path, settings, p, session, explain=explain_mode)
+        return finish_question(body, answer, p, session_id, session)
+
+    @app.post("/api/ask/stream")
+    async def ask_stream(body: AskBody):
+        """The same answer as /api/ask, as it happens: one JSON object per line (newline-delimited JSON).
+
+        {"event": "stage", "text"} a step starts; {"event": "delta", "text"} a piece of the written answer
+        (not yet checked); {"event": "retry", "reason"} the text failed the number check and is rewritten;
+        {"event": "done", "answer"} the finished, checked answer (the same JSON as /api/ask);
+        {"event": "error", "detail"} something broke. Checks (budget, rate) answer with a normal HTTP error first.
+        """
+        path, p, session_id, session = await run_in_threadpool(start_question, body)
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def emit(kind: str, **data) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, {"event": kind, **data})
+
+        def work() -> None:
+            try:
+                answer = ask(body.question.strip(), path, settings, p, session, explain=explain_mode, on_event=emit)
+                emit("done", answer=finish_question(body, answer, p, session_id, session))
+            except Exception:  # noqa: BLE001 - the page gets a short message; the log gets the details
+                logging.getLogger("tradequery").exception("streamed question failed")
+                emit("error", detail="Something went wrong while answering. Try again.")
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        async def lines():
+            job = loop.run_in_executor(None, work)
+            while (item := await queue.get()) is not None:
+                yield json.dumps(item) + "\n"
+            await job
+
+        return StreamingResponse(lines(), media_type="application/x-ndjson")
 
     def run_spec(login: int, spec_data: dict, question: str, session_id: str | None = None) -> dict:
         path = account_path(login)
