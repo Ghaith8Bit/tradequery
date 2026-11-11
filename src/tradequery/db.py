@@ -33,7 +33,7 @@ from .models import TRADE_TYPES, Bar, CashFlow, Deal, Trade
 from .settings import Settings, data_dir
 from .trades import build_trades, derive_trades, extract_cash_flows
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 _SQL_TYPES = {"int": "INTEGER", "float": "REAL", "str": "TEXT", "datetime": "TEXT", "bool": "INTEGER"}
 
@@ -228,6 +228,20 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
         "CREATE VIEW v_sequences AS SELECT s.*, f.drawdown_abs, f.drawdown_pct, f.drawdown_time_utc, "
         "f.equity_at_start, EXISTS (SELECT 1 FROM sequence_trades st JOIN trade_news n "
         "ON n.position_id = st.position_id WHERE st.sequence_id = s.sequence_id) AS news_overlap "
+        "FROM sequences s LEFT JOIN sequence_facts f ON f.sequence_id = s.sequence_id",
+    ),
+    9: (
+        # Baskets get the fields trades have (weekday, hour, session, month, swap, ...), so a question can be
+        # asked per basket. One row per basket now, with the drawdown left empty without price bars.
+        # Filled by the next sync or import, or `tradequery rebuild`.
+        *(f"ALTER TABLE sequence_facts ADD COLUMN {c}" for c in (
+            "weekday TEXT", "hour INTEGER", "session TEXT", "month TEXT", "canonical_symbol TEXT", "magic INTEGER",
+            "swap REAL", "commission REAL", "profit REAL", "total_lots REAL", "hold_minutes REAL")),
+        "DROP VIEW v_sequences",
+        "CREATE VIEW v_sequences AS SELECT s.*, f.drawdown_abs, f.drawdown_pct, f.drawdown_time_utc, "
+        "f.equity_at_start, f.weekday, f.hour, f.session, f.month, f.canonical_symbol, f.magic, f.swap, "
+        "f.commission, f.profit, f.total_lots, f.hold_minutes, EXISTS (SELECT 1 FROM sequence_trades st "
+        "JOIN trade_news n ON n.position_id = st.position_id WHERE st.sequence_id = s.sequence_id) AS news_overlap "
         "FROM sequences s LEFT JOIN sequence_facts f ON f.sequence_id = s.sequence_id",
     ),
 }
@@ -517,8 +531,13 @@ def save_facts(conn: sqlite3.Connection, built) -> None:
         [(t(p.time_utc), p.balance, p.floating, p.equity, p.equity_low) for p in built.equity],
     )
     conn.executemany(
-        "INSERT INTO sequence_facts VALUES (?, ?, ?, ?, ?)",
-        [(b.sequence_id, b.depth_abs, b.depth_pct, t(b.time_utc), b.equity_at_start) for b in built.baskets],
+        "INSERT INTO sequence_facts (sequence_id, drawdown_abs, drawdown_pct, drawdown_time_utc, equity_at_start, "
+        "weekday, hour, session, month, canonical_symbol, magic, swap, commission, profit, total_lots, hold_minutes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(b.sequence_id, *((b.drawdown.depth_abs, b.drawdown.depth_pct, t(b.drawdown.time_utc), b.drawdown.equity_at_start)
+                           if b.drawdown else (None, None, None, None)),
+          b.weekday, b.hour, b.session, b.month, b.canonical_symbol, b.magic, b.swap, b.commission, b.profit,
+          b.total_lots, b.hold_minutes) for b in built.baskets],
     )
 
 

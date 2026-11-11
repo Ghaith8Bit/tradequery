@@ -87,7 +87,9 @@ Values and conventions:
 - Level: first decide whether the question is about the whole account, baskets or single trades. "Basket" (also
   "series", "martingale/grid run") means entity sequences, one row per basket; "trade", "position" or "order"
   means trades. Counts, win rates and averages "per basket" are computed on sequences (count, avg of is_win as
-  win_rate, avg or sum of net_pnl), never on trades.
+  win_rate, avg or sum of net_pnl), never on trades. A basket's weekday, hour and session are of its first leg's
+  open; its month is of its close; swap, commission, profit and total_lots are summed over its legs; its net
+  result is net_pnl (net_profit on trades).
 - Basket drawdown: how far a basket went into the red before it closed is sequences.drawdown_abs (money) and
   drawdown_pct (a share of account equity when the basket opened: 0.6 = 60%; null without price bars). "Baskets
   that went to -60%" means drawdown_pct gte 0.6. A plain "drawdown" without "basket" is the account drawdown
@@ -161,6 +163,7 @@ class Answer:
     verified: bool = False
     unsupported_numbers: list[str] = field(default_factory=list)
     error: str | None = None
+    error_detail: str | None = None  # the technical reason, shown folded away
     spec_attempts: int = 0
     usage: Usage = field(default_factory=Usage)
 
@@ -299,7 +302,8 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
         except SpecError as exc:
             error = str(exc)
     if answer.spec is None:
-        answer.error = f"The question could not be turned into a valid query ({error}). Try rephrasing it."
+        answer.error = "That question couldn't be turned into a query, so nothing was looked up. Try rephrasing it."
+        answer.error_detail = error
         return answer
 
     if answer.spec.kind != "query":

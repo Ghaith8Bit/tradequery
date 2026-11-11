@@ -63,6 +63,47 @@ def test_a_single_row_answer_has_a_headline_number():
     assert headline(basket, result(["sequence_id", "symbol"], [[1, "XAUUSD"]])) is None
 
 
+def test_the_level_switch_is_offered_only_when_the_other_level_has_the_fields():
+    from tradequery.scope import fits_level
+
+    swap_by_day = parse_spec({"entity": "trades", "group_by": ["weekday"],
+                              "aggregations": [{"func": "sum", "field": "swap", "alias": "swap_total"}],
+                              "order_by": [{"field": "swap_total", "direction": "asc"}], "limit": 1})
+    assert fits_level(swap_by_day, "sequences")  # baskets now have weekday and swap
+    by_r = parse_spec({"entity": "trades", "metrics": ["avg_r"]})
+    assert not fits_level(by_r, "sequences")  # R exists per trade only
+    tagged = parse_spec({"entity": "trades", "filters": [{"field": "tags", "op": "eq", "value": "revenge_trade"}]})
+    assert not fits_level(tagged, "sequences")
+    lots = parse_spec({"entity": "trades", "filters": [{"field": "net_profit", "op": "lt", "value": 0}],
+                       "order_by": [{"field": "lots", "direction": "desc"}]})
+    assert fits_level(lots, "sequences")  # net_profit and lots have basket names
+    deep = parse_spec({"entity": "sequences", "filters": [{"field": "drawdown_pct", "op": "gte", "value": 0.2}]})
+    assert not fits_level(deep, "trades")  # trades have no basket drawdown
+    scope = describe(deep, result(["sequence_id"], [[1], [2]]), has_equity=True, has_baskets=True)
+    assert [s["label"] for s in scope["switches"]] == []
+    scope = describe(by_r, result(["avg_r"], [[0.4]]), has_equity=True, has_baskets=True)
+    assert scope["switches"] == []
+
+
+def test_baskets_carry_trade_fields(tmp_path):
+    from tradequery import db
+    from tradequery.settings import load_settings
+    from tradequery.synthetic import generate_account
+
+    conn = db.connect(db.db_path(3, tmp_path))
+    with conn:
+        db.upsert_deals(conn, generate_account().deals)
+        db.rebuild_derived(conn, load_settings())
+    for row in conn.execute("SELECT sequence_id, weekday, swap, total_lots, drawdown_pct FROM v_sequences"):
+        legs = conn.execute("SELECT weekday, swap, lots FROM v_trades WHERE sequence_id = ? ORDER BY open_time_utc",
+                            (row["sequence_id"],)).fetchall()
+        assert row["weekday"] == legs[0]["weekday"]
+        assert row["swap"] == round(sum(t["swap"] for t in legs), 2)
+        assert row["total_lots"] == round(sum(t["lots"] for t in legs), 2)
+        assert row["drawdown_pct"] is None  # no price bars in the sample
+    conn.close()
+
+
 def test_clarify_answers_have_no_scope():
     assert describe(parse_spec({"kind": "clarify", "message": "How big?"}), None, has_equity=True,
                     has_baskets=True) is None

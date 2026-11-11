@@ -98,6 +98,7 @@ def _answer_json(answer: Answer, provider: Provider | None, session_id: str | No
         "verified": answer.verified,
         "unsupported_numbers": answer.unsupported_numbers,
         "error": answer.error,
+        "error_detail": answer.error_detail,
         "spec": answer.spec.model_dump(mode="json", exclude_defaults=True) if answer.spec else None,
         "result": _result_json(answer.result),
         "usage": {"requests": answer.usage.requests, "input_tokens": answer.usage.input_tokens,

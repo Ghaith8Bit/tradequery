@@ -52,7 +52,8 @@ def test_two_invalid_specs_fail_politely(path):
     fake = FakeProvider(["not json at all", json.dumps({"entity": "orders"})])
     answer = ask("anything", path, SETTINGS, fake)
     assert answer.spec is None and answer.result is None
-    assert answer.error.startswith("The question could not be turned into a valid query")
+    assert answer.error.startswith("That question couldn't be turned into a query")
+    assert "entity" in answer.error_detail  # the technical reason is kept, folded away on the page
 
 
 def test_invented_numbers_get_one_retry_then_the_table_without_prose(path):

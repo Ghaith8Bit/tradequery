@@ -81,6 +81,29 @@ class EpisodeRow:
     added_capital: float
 
 
+@dataclass(frozen=True)
+class BasketRow:
+    """Per-basket fields for questions asked "per basket" (weekday, swap, ...), from its legs.
+
+    Weekday, hour and session are of the first leg's open (as for a trade); month is of the
+    basket's close, in broker server time. Money and lots are summed over the legs.
+    """
+
+    sequence_id: int
+    weekday: str | None
+    hour: int | None
+    session: str | None
+    month: str
+    canonical_symbol: str
+    magic: int
+    swap: float
+    commission: float
+    profit: float
+    total_lots: float
+    hold_minutes: float
+    drawdown: pricepath.BasketDrawdown | None  # needs one-minute bars
+
+
 @dataclass
 class Facts:
     trade_facts: list[TradeFact]
@@ -88,7 +111,7 @@ class Facts:
     episodes: list[EpisodeRow]
     exposure: list[exposure_mod.ExposureEvent]
     equity: list[pricepath.EquityPoint]
-    baskets: list[pricepath.BasketDrawdown] = field(default_factory=list)  # needs one-minute bars
+    baskets: list[BasketRow] = field(default_factory=list)
 
 
 def _episode_rows(episodes, basis, start_id, trades, by_pid, links, first_time, last_time) -> list[EpisodeRow]:
@@ -187,7 +210,23 @@ def build(
             news_overlap=t.position_id in news_hit,
             equity_drawdown_episode_id=equity_of.get(t.position_id),
         ))
-    baskets = pricepath.basket_drawdowns(
+    drawdowns = {d.sequence_id: d for d in pricepath.basket_drawdowns(
         sequences, trades, bars, symbol_specs=specs, covered=set(paths), cash_flows=cash_flows, curve=curve,
-        opening_balance=opening_balance) if paths else []
+        opening_balance=opening_balance)} if paths else {}
+    baskets = []
+    for seq in sequences:
+        legs = [by_pid[pid] for pid in seq.position_ids if pid in by_pid]
+        if not legs:
+            continue
+        first = min(legs, key=lambda t: t.open_time_utc)
+        end = max(t.close_time_utc for t in legs)
+        baskets.append(BasketRow(
+            sequence_id=seq.sequence_id, weekday=first.weekday, hour=first.hour, session=first.session,
+            month=settings.clock.from_utc(end).strftime("%Y-%m"),
+            canonical_symbol=canonical_symbol(first.symbol, aliases), magic=first.magic,
+            swap=round(sum(t.swap for t in legs), 2), commission=round(sum(t.commission for t in legs), 2),
+            profit=round(sum(t.profit for t in legs), 2), total_lots=round(sum(t.lots for t in legs), 2),
+            hold_minutes=round((end - first.open_time_utc).total_seconds() / 60, 1),
+            drawdown=drawdowns.get(seq.sequence_id),
+        ))
     return Facts(facts, streak_rows, episodes, exposure_mod.exposure_events(trades), curve, baskets)
