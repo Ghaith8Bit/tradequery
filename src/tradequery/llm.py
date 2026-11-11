@@ -82,6 +82,14 @@ def choose_model(names: list[str]) -> str | None:
     return None
 
 
+def _is_network_error(error: Exception) -> bool:
+    """A transport failure from the HTTP client (httpx or its vendored copy): timeout, DNS, refused connection."""
+    names = [cls.__name__ for cls in type(error).__mro__]
+    module = type(error).__module__
+    return module.split(".")[0].startswith("httpx") and any(
+        n in ("TransportError", "TimeoutException", "NetworkError", "ConnectError", "ReadTimeout") for n in names)
+
+
 class GeminiProvider(Provider):
     name = "gemini"
     # pauses before each retry on a server error (503 "high demand" usually clears within seconds)
@@ -136,11 +144,26 @@ class GeminiProvider(Provider):
                 response = self._client.models.generate_content(model=self.model, contents=prompt, config=config)
                 break
             except self._errors.APIError as error:
-                # 5xx ("high demand", overloaded) is usually brief: one retry after a short pause
+                # 5xx ("high demand", overloaded) is usually brief: retry after a short pause
                 if attempt < len(self.retry_pauses) and (getattr(error, "code", 0) or 0) >= 500:
                     self._sleep(self.retry_pauses[attempt])
                     continue
                 raise self._translate(error) from None
+            except (OSError, TimeoutError) as error:
+                # no answer at all (DNS, connection reset, read timeout): also usually brief
+                if attempt < len(self.retry_pauses):
+                    self._sleep(self.retry_pauses[attempt])
+                    continue
+                raise LLMError(f"Could not reach Gemini ({type(error).__name__}). Check the internet connection "
+                               "and try again.") from None
+            except Exception as error:  # the SDK's HTTP client raises its own transport errors
+                if not _is_network_error(error):
+                    raise
+                if attempt < len(self.retry_pauses):
+                    self._sleep(self.retry_pauses[attempt])
+                    continue
+                raise LLMError(f"Could not reach Gemini ({type(error).__name__}). Check the internet connection "
+                               "and try again.") from None
         text = response.text
         if not text:
             feedback = getattr(response, "prompt_feedback", None)

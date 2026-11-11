@@ -53,6 +53,8 @@
 {"id": "seq-04", "category": "sequences", "question": "Did any martingale sequence end in a loss?", "gold": {"entity": "sequences", "fields": ["sequence_id"], "filters": [{"field": "type", "op": "in", "value": ["martingale", "martingale_grid"]}, {"field": "is_win", "op": "eq", "value": false}]}}
 {"id": "seq-05", "category": "sequences", "question": "What was the biggest lot multiplier in any of my sequences?", "gold": {"entity": "sequences", "fields": ["max_lot_multiplier"], "order_by": [{"field": "max_lot_multiplier", "direction": "desc"}], "limit": 1}}
 {"id": "seq-06", "category": "sequences", "question": "Show my grid sequences.", "gold": {"entity": "sequences", "fields": ["sequence_id"], "filters": [{"field": "type", "op": "in", "value": ["grid", "martingale_grid"]}]}}
+// seq-07 came from the held-out set: it failed there (sorted column not shown) and the code was fixed.
+{"id": "seq-07", "category": "sequences", "question": "What was the total lot size of my biggest basket?", "gold": {"entity": "sequences", "fields": ["total_lots"], "order_by": [{"field": "total_lots", "direction": "desc"}], "limit": 1}}
 // --- news (6)
 {"id": "news-01", "category": "news", "question": "Which trades overlapped high-impact news?", "gold": {"entity": "trades", "fields": ["position_id"], "filters": [{"field": "news_overlap", "op": "eq", "value": true}], "limit": 500}}
 {"id": "news-02", "category": "news", "question": "Show winning martingale sequences during news.", "gold": {"entity": "sequences", "fields": ["sequence_id"], "filters": [{"field": "type", "op": "in", "value": ["martingale", "martingale_grid"]}, {"field": "is_win", "op": "eq", "value": true}, {"field": "news_overlap", "op": "eq", "value": true}]}}
