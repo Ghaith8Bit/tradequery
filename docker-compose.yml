@@ -20,7 +20,8 @@ services:
         UID: ${UID:-1000}
     command: ["serve"]
     ports:
-      - "127.0.0.1:8000:8000"
+      # TQ_BIND=0.0.0.0 opens the page to your network: needs TQ_ALLOWED_HOSTS and TQ_PASSWORD too
+      - "${TQ_BIND:-127.0.0.1}:8000:8000"
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}
@@ -29,6 +30,7 @@ services:
       TQ_DAILY_TOKENS: ${TQ_DAILY_TOKENS:-1000000}
       TQ_EXPLAIN: ${TQ_EXPLAIN:-auto}
       TQ_ALLOWED_HOSTS: ${TQ_ALLOWED_HOSTS:-}
+      TQ_PASSWORD: ${TQ_PASSWORD:-}
     volumes:
       - ./data:/data
     restart: unless-stopped

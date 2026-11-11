@@ -796,6 +796,15 @@ def cmd_rebuild(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    from .backup import backup
+
+    target = backup(args.data_dir or data_dir(), keep=args.keep)
+    print(f"Backed up {len(list((target / 'accounts').glob('*.db')))} account database(s) to {target}")
+    print(f"Keeping the newest {args.keep}. Copy data/backups to another drive now and then.")
+    return 0
+
+
 def cmd_serve(args) -> int:
     from .api import serve
 
@@ -951,6 +960,9 @@ def main(argv=None) -> int:
     rb = sub.add_parser("rebuild", help="recompute the derived tables of stored accounts (after an upgrade)")
     rb.add_argument("--login", type=int, help="only this account (default: all)")
     rb.set_defaults(func=cmd_rebuild)
+    bk = sub.add_parser("backup", help="copy every account database and the news files to data/backups/")
+    bk.add_argument("--keep", type=int, default=10, help="how many backups to keep (newest first)")
+    bk.set_defaults(func=cmd_backup)
     sv = sub.add_parser("serve", help="run the web page and API")
     sv.add_argument("--host", default="0.0.0.0", help="address to listen on (inside Docker: all)")
     sv.add_argument("--port", type=int, default=8000)
