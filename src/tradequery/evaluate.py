@@ -2,7 +2,9 @@
 
 Each question in evals/questions.jsonl has either a hand-written gold spec (the
 gold answer is what it returns on the eval account) or ``"expect": "refusal"``
-(the model must answer unsupported or clarify). The eval account is the
+(the model must answer unsupported or clarify). A follow-up question also has
+``"after": {"question", "spec"}``: the earlier turn, answered with that spec
+without a model call, so the follow-up is asked with its focus. The eval account is the
 synthetic one plus four planted calendar events, rebuilt for every run, so
 results are reproducible and safe to publish.
 
@@ -30,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import db
-from .ask import ask
+from .ask import Session, ask
 from .execute import Result, execute
 from .llm import Provider, QuotaError
 from .news import NewsEvent
@@ -193,11 +195,12 @@ class Pacer:
 def run_one(q: dict, path: Path, settings: Settings, provider: Provider, *, explain: bool) -> Outcome:
     expect = "refusal" if q.get("expect") == "refusal" else "result"
     outcome = Outcome(q["id"], q.get("category", "other"), q["question"], expect)
+    session = _earlier_turn(q.get("after"), path, settings)
     started = time.monotonic()
     if explain:
-        answer = ask(q["question"], path, settings, provider)
+        answer = ask(q["question"], path, settings, provider, session)
     else:  # spec only: one model call
-        answer = _spec_only(q["question"], path, settings, provider)
+        answer = _spec_only(q["question"], path, settings, provider, session)
     outcome.seconds = round(time.monotonic() - started, 2)
     outcome.requests, outcome.input_tokens, outcome.output_tokens = (
         answer.usage.requests, answer.usage.input_tokens, answer.usage.output_tokens)
@@ -220,7 +223,17 @@ def run_one(q: dict, path: Path, settings: Settings, provider: Provider, *, expl
     return outcome
 
 
-def _spec_only(question, path, settings, provider):
+def _earlier_turn(after: dict | None, path: Path, settings: Settings) -> Session | None:
+    """The conversation a follow-up question is asked in: the earlier turn, answered by its gold spec."""
+    if not after:
+        return None
+    spec = parse_spec(after["spec"])
+    session = Session()
+    session.remember(after["question"], spec, execute(spec, path, settings))
+    return session
+
+
+def _spec_only(question, path, settings, provider, session=None):
     """Call 1 only: question -> spec -> result (no explanation)."""
     from .ask import SPEC_SYSTEM, Answer, _json_object, _spec_prompt, account_context
     from .execute import QueryTimeout
@@ -228,7 +241,7 @@ def _spec_only(question, path, settings, provider):
     from .spec import SpecError
 
     answer = Answer(question)
-    prompt = _spec_prompt(question, account_context(path, settings), None)
+    prompt = _spec_prompt(question, account_context(path, settings), session)
     error = None
     for attempt in (1, 2):
         answer.spec_attempts = attempt

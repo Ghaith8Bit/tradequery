@@ -6,6 +6,7 @@
   GET  /api/presets       the plan's example questions (answered without the model)
   POST /api/ask           a plain-English question, with a session id for follow-ups
   POST /api/ask/stream    the same, streamed as it happens (newline-delimited JSON events)
+  POST /api/focus         drop one part of a chat's focus (period, symbol, item ...) or all of it
   POST /api/preset        one example question, by number: no model call, instant
   POST /api/query         a hand-written QuerySpec
   GET  /api/overview      the start screen: key numbers, two charts, risk facts
@@ -55,7 +56,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import db, syncjobs
 from .auth import COOKIE, LOGIN_PAGE, SESSION_SECONDS, PasswordGate, gate_from_env
-from .ask import Answer, Session, _found_ids, ask, checked_template, drawdown_default, is_share_column
+from .followup import ID_LABELS
+from .ask import Answer, Session, ask, checked_template, drawdown_default, is_share_column
 from .evaluate import EVAL_LOGIN as SAMPLE_LOGIN
 from .examples import EXAMPLES, with_drawdown_basis
 from .execute import QueryTimeout, Result, execute
@@ -92,6 +94,14 @@ class AskBody(BaseModel):
     question: str = Field(min_length=1, max_length=500)
     session_id: str | None = Field(default=None, max_length=64)
     smart: bool = False  # extra checks, a "Why" and questions worth asking next (about one more model call)
+
+
+FOCUS_KEYS = {"all", "item", "period", "symbol", "magic", "side", *ID_LABELS}
+
+class FocusBody(BaseModel):
+    login: int
+    session_id: str = Field(min_length=1, max_length=64)
+    drop: str = Field(min_length=1, max_length=40)  # a chip's key, or "all"
 
 
 class PresetBody(BaseModel):
@@ -375,7 +385,9 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
         book.record(answer.usage, templated=answer.text_source == "template")
         session.login = body.login
         remember(session_id, session)
-        return _answer_json(answer, p, session_id, levels_of(body.login))
+        out = _answer_json(answer, p, session_id, levels_of(body.login))
+        out["focus"] = session.focus()
+        return out
 
     @app.post("/api/ask")
     def ask_question(body: AskBody):
@@ -441,11 +453,26 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
             session = sessions.pop(session_id, None) or Session()
             if session.login not in (None, login):
                 session = Session()
-            session.login, session.question = login, question
-            session.spec = spec.model_dump(mode="json", exclude_defaults=True)
-            session.found = _found_ids(answer.result)
+            session.login = login
+            session.remember(question, spec, answer.result)
             remember(session_id, session)
-        return _answer_json(answer, None, session_id, levels_of(login), model_ready())
+            answer_focus = session.focus()
+        else:
+            answer_focus = []
+        out = _answer_json(answer, None, session_id, levels_of(login), model_ready())
+        out["focus"] = answer_focus
+        return out
+
+    @app.post("/api/focus")
+    def change_focus(body: FocusBody):
+        """Drop one part of the chat's focus (a chip's key), or all of it, before the next question."""
+        if body.drop not in FOCUS_KEYS:
+            raise HTTPException(400, f"drop must be one of: {', '.join(sorted(FOCUS_KEYS))}")
+        session = sessions.get(body.session_id)
+        if session is None or session.login not in (None, body.login):
+            return {"focus": []}  # nothing to narrow: the next question starts fresh anyway
+        session.drop(body.drop)
+        return {"focus": session.focus()}
 
     @app.post("/api/preset")
     def preset(body: PresetBody):

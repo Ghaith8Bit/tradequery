@@ -147,6 +147,13 @@
   .send { border: 0; background: var(--accent); color: #fff; width: 38px; height: 38px; border-radius: 11px; cursor: pointer;
           display: grid; place-items: center; flex: none; }
   .send:disabled { opacity: .45; cursor: default; }
+  .focus-bar { max-width: 860px; margin: 0 auto 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+               font-size: 12px; color: var(--muted); }
+  .focus-chip { display: inline-flex; align-items: center; gap: 2px; background: var(--panel); border: 1px solid var(--line);
+                border-radius: 999px; padding: 2px 4px 2px 10px; color: var(--text); font-size: 12.5px; }
+  .focus-chip button, .focus-clear { border: 0; background: transparent; color: var(--muted); cursor: pointer;
+                                     border-radius: 999px; padding: 2px 6px; font: inherit; }
+  .focus-chip button:hover, .focus-clear:hover { color: var(--accent); }
   .hint { max-width: 860px; margin: 6px auto 0; font-size: 12px; color: var(--muted); text-align: center; }
   .backdrop { display: none; }
 
@@ -297,6 +304,7 @@
     </div>
     <div class="chat" id="chat"><div class="inner" id="thread"></div></div>
     <form class="composer" id="form" autocomplete="off">
+      <div class="focus-bar" id="focusBar" hidden></div>
       <div class="box">
         <textarea id="question" rows="1" maxlength="500" placeholder="Ask about your trading…" aria-label="Your question"></textarea>
         <button class="smart-toggle" id="smart" type="button" aria-pressed="false"
@@ -1049,7 +1057,39 @@ function renderHistory() {
     h.appendChild(b);
   });
 }
+/* what the chat is narrowed to: follow-ups keep it until a chip is removed */
+function renderFocus() {
+  const bar = $("focusBar");
+  const chat = currentChat();
+  const focus = (chat && chat.focus) || [];
+  bar.replaceChildren();
+  bar.hidden = !focus.length;
+  if (!focus.length) return;
+  bar.appendChild(el("span", { title: "Follow-up questions keep this focus" }, "Focus:"));
+  focus.forEach((f) => {
+    const chip = el("span", { class: "focus-chip" }, f.label);
+    const x = el("button", { type: "button", "aria-label": `Stop focusing on ${f.label}`, title: "Remove" }, "×");
+    x.addEventListener("click", () => dropFocus(f.key));
+    chip.appendChild(x);
+    bar.appendChild(chip);
+  });
+  const clear = el("button", { class: "focus-clear", type: "button", title: "The next question starts fresh" }, "Clear");
+  clear.addEventListener("click", () => dropFocus("all"));
+  bar.appendChild(clear);
+}
+async function dropFocus(key) {
+  const chat = currentChat();
+  if (!chat || state.busy) return;
+  try {
+    const res = chat.sessionId ? await api("/api/focus", { login: state.login, session_id: chat.sessionId, drop: key }) : { focus: [] };
+    chat.focus = res.focus;
+  } catch { chat.focus = key === "all" ? [] : chat.focus.filter((f) => f.key !== key); }
+  store.save(state.login, state.chats);
+  renderFocus();
+  q.focus();
+}
 function renderThread() {
+  renderFocus();
   const t = $("thread");
   t.replaceChildren();
   const chat = currentChat();
@@ -1114,6 +1154,7 @@ async function send(question, request) {
   try {
     data = await request(chat, live);
     if (data.session_id) chat.sessionId = data.session_id;
+    if (data.focus) chat.focus = data.focus;
   } catch (error) {
     data = { error: error.message, result: null, text: null };
   }
@@ -1121,6 +1162,7 @@ async function send(question, request) {
   renderAnswer(bubble, data);
   chat.messages.push({ role: "bot", data: trimForStorage(data) });
   store.save(state.login, state.chats);
+  renderFocus();
   box.scrollIntoView({ behavior: "smooth", block: "start" });
   refreshUsage();
   state.busy = false;
