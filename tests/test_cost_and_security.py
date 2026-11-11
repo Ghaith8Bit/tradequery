@@ -116,7 +116,7 @@ def test_other_host_names_are_refused(root):
     app, _ = make(root)
     assert TestClient(app, base_url="http://attacker.example").get("/api/accounts").status_code == 400
     assert TestClient(app, base_url="http://127.0.0.1:8000").get("/api/accounts").status_code == 200
-    extra, _ = make(root, allowed_hosts=["localhost", "tq.lan"])
+    extra, _ = make(root, allowed_hosts=["localhost", "tq.lan"], gate=None)
     assert TestClient(extra, base_url="http://tq.lan").get("/api/accounts").status_code == 200
 
 

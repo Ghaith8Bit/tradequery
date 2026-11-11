@@ -7,7 +7,7 @@ DC = docker compose
 # without it, code changes would be silently ignored by an old image.
 RUN = $(DC) run --rm --build
 
-.PHONY: test demo sample import show mt5-setup inspect sync calendar news ask eval web web-stop shell-mt5 clean-mt5
+.PHONY: test demo sample import show mt5-setup inspect sync calendar news ask eval eval-heldout backup web web-stop shell-mt5 clean-mt5
 
 test:        ## unit tests, inside Docker
 	$(RUN) --entrypoint pytest app -q
@@ -48,6 +48,12 @@ eval:        ## run the eval suite on Gemini (about 160 requests): make eval [AR
 
 # The sync worker (the page's "Sync now") needs the Wine volume from make mt5-setup.
 MT5_READY = $(shell docker volume ls -q 2>/dev/null | grep -q 'mt5-wine$$' && echo yes)
+
+eval-heldout: ## the held-out questions, never used to tune the prompt (about 50 requests)
+	$(RUN) -v $(CURDIR)/evals:/app/evals app eval --questions evals/heldout.jsonl --out evals/results/heldout $(ARGS)
+
+backup:      ## copy the account databases and news files to data/backups/ (make backup KEEP=20)
+	$(RUN) app backup $(if $(KEEP),--keep $(KEEP),)
 
 web:         ## start the web page in the background: http://localhost:8000 (stop: make web-stop)
 	$(DC) up -d --build web $(if $(MT5_READY),sync-worker,)

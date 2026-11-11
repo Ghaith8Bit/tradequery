@@ -49,7 +49,7 @@ def test_the_page_and_the_lists(root):
     assert [a["login"] for a in accounts] == [1001, 1002] and accounts[0]["trades"] == 48
     presets = c.get("/api/presets").json()
     assert len(presets) == len(EXAMPLES) and presets[0]["number"] == 1
-    assert c.get("/api/status").json() == {"model": "fake fake-model", "ready": True}
+    assert c.get("/api/status").json() == {"model": "fake fake-model", "ready": True, "login_required": False}
 
 
 def test_status_without_a_key_says_so(root):

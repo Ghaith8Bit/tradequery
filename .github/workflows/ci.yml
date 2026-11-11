@@ -1,10 +1,42 @@
 name: tests
 on: [push, pull_request]
+
+# a newer push to the same branch cancels the older run
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install -e ".[dev,query,llm,api]" && pytest -q
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev,query,llm,api]"
+      - run: pytest -q
+
+  # Real trade data and secrets must never be committed (see .gitignore).
+  no-private-files:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: No databases, reports or .env files in the repository
+        run: |
+          bad=$(git ls-files | grep -E '(^|/)(data/|\.env$|\.env\.[^e])|\.(db|sqlite3?)$|ReportHistory' || true)
+          if [ -n "$bad" ]; then echo "Private files are committed:"; echo "$bad"; exit 1; fi
+      - name: No API keys in the repository
+        run: |
+          if git grep -nE 'AIza[0-9A-Za-z_-]{35}' -- . ; then echo "A Google API key is committed"; exit 1; fi

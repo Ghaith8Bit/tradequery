@@ -183,3 +183,9 @@ def test_did_news_cause_the_worst_drawdown(account):
     path, _, _ = account
     (row,) = rows_as_dicts(ask(path, SPECS["Did news cause my worst drawdown?"]))
     assert row["news_loss_share"] in (None, 0.0)  # no calendar in this account: no overlap at all
+
+
+def test_a_list_sorted_by_a_column_shows_that_column(account):
+    spec = {"entity": "sequences", "order_by": [{"field": "total_lots", "direction": "desc"}], "limit": 1}
+    result = ask(account[0], spec)
+    assert "total_lots" in result.columns  # not a default column, but the question is about it

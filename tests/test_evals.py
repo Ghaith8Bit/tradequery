@@ -25,9 +25,9 @@ def test_the_suite_has_the_plan_categories_and_size():
     counts = {}
     for q in QUESTIONS:
         counts[q["category"]] = counts.get(q["category"], 0) + 1
-    assert len(QUESTIONS) == 80 and len({q["id"] for q in QUESTIONS}) == 80
+    assert len(QUESTIONS) == 81 and len({q["id"] for q in QUESTIONS}) == 81
     assert counts == {"basic filters": 10, "group-by and ranking": 10, "named metrics": 12, "detector tags": 8,
-                      "sequences": 6, "news": 6, "drawdown": 6, "exposure": 6, "cash flows": 3, "magic numbers": 3,
+                      "sequences": 7, "news": 6, "drawdown": 6, "exposure": 6, "cash flows": 3, "magic numbers": 3,
                       "adversarial": 10}
 
 
@@ -40,6 +40,19 @@ def test_every_gold_spec_is_valid_and_runs(path):
                 empty.append(q["id"])
     # questions whose right answer is "nothing": no revenge trades, no overtrading, no grid, no losing martingale
     assert sorted(empty) == ["seq-04", "seq-06", "tag-01", "tag-07"]
+
+
+def test_the_held_out_set_is_separate_and_every_gold_returns_data(path):
+    held = load_questions(Path(__file__).parents[1] / "evals" / "heldout.jsonl")
+    assert len(held) == 43 and len({q["id"] for q in held}) == 43
+    tuned_ids = {q["id"] for q in QUESTIONS}
+    tuned_text = {q["question"].lower() for q in QUESTIONS}
+    assert not tuned_ids & {q["id"] for q in held}
+    assert not tuned_text & {q["question"].lower() for q in held}
+    for q in held:
+        if "gold" in q:
+            rows = execute(parse_spec(q["gold"]), path, SETTINGS).rows
+            assert rows and any(v is not None for r in rows for v in r), q["id"]
 
 
 def test_planted_news_gives_the_news_questions_real_answers(path):

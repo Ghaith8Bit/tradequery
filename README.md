@@ -47,7 +47,7 @@ the page or run `make ask Q="What is my win rate?"`. Without a key the example q
 
 ## Eval results (summary)
 
-80 questions with hand-written gold answers, 10 of them adversarial, scored on the sample account. Gemini 3.5
+80 questions with hand-written gold answers, 10 of them adversarial, scored on the sample account, plus a held-out set of 44 written after tuning (97.4% result match on its first run). Gemini 3.5
 Flash-Lite, free tier: **result match 91.4% on the first run (100% after prompt fixes), adversarial refusals 100%,
 number check 100%, 1.2 model requests and $0 per question.** Details and caveats: [Eval results](#eval-results).
 
@@ -128,6 +128,8 @@ The API behind it (FastAPI) opens one account database per request (read-only, e
 - accepts a POST (ask, sync, upload) only with the page's `X-TradeQuery` header and not from another site's page (`Origin`, `Sec-Fetch-Site`);
 - sends a Content-Security-Policy, refuses to be framed, and marks answers `no-store`. There is no API docs page, since it would load scripts from a CDN.
 
+**Using it from your phone (optional).** Set `TQ_PASSWORD` (at least 10 characters), `TQ_BIND=0.0.0.0` and `TQ_ALLOWED_HOSTS` (this computer's address as the phone types it) in `.env`, then `make web`. The page then asks for the password once and keeps the browser signed in for 30 days (an HttpOnly, SameSite=Strict cookie; changing the password signs everyone out; 5 wrong tries per 5 minutes). The page refuses to start with extra hosts and no password. Only do this on a network you trust: plain http can be read by others on the same network. Under WSL2, Windows must also forward the port (or use mirrored networking).
+
 ## Asking in plain English
 
 ```bash
@@ -153,11 +155,12 @@ Answers are not cached: a new sync would change them, and each question is cheap
 
 ## Eval results
 
-80 questions with hand-written gold answers (`evals/questions.jsonl`): 70 clear questions across basic filters, group-by and ranking, named metrics, detector tags, sequences, news, drawdown, exposure, cash flows and magic numbers, plus 10 adversarial ones (an instruction in the question, SQL text, "delete my trades", credentials, another account, a vague term, a prediction, an unknown metric, trade comments). They run on the synthetic account with planted calendar events, so they are reproducible and safe to publish. Results are compared, not spec text: any spec that returns the gold result passes.
+81 questions with hand-written gold answers (`evals/questions.jsonl`; runs 1 to 3 used the first 80): 71 clear questions across basic filters, group-by and ranking, named metrics, detector tags, sequences, news, drawdown, exposure, cash flows and magic numbers, plus 10 adversarial ones (an instruction in the question, SQL text, "delete my trades", credentials, another account, a vague term, a prediction, an unknown metric, trade comments). They run on the synthetic account with planted calendar events, so they are reproducible and safe to publish. Results are compared, not spec text: any spec that returns the gold result passes.
 
 ```bash
 make eval                     # about 160 model requests; paced for the free tier
 make eval ARGS="--limit 10"   # a quick check
+make eval-heldout             # 43 held-out questions, never used to tune the prompt
 ```
 
 | Gemini 3.5 Flash-Lite (free tier) | Run 1 | Run 2 | Run 3 (cost cuts) |
@@ -179,7 +182,19 @@ Run 1 failures, and what changed before run 2:
 
 Run 3 adds template answers (most simple answers need one model call instead of two), the daily budget, and a total on the Rows line for grouped tables, so the model no longer adds group counts up itself (which the number checker had rightly rejected). Its seconds per question are higher because Google returned many 503 "high demand" errors that day and the run waited on retries. A try with only the 5 closest examples in the prompt dropped result match to 94.3%, so it was dropped.
 
-**Caveat:** the run 2 changes were made after seeing run 1's failures on these same questions, so run 2 partly measures tuning to this set. Run 1 is the fairer estimate for new questions; a held-out question set is the next step. The plan's two-model comparison is not done yet: the free tier allows only about 20 requests a day on larger Gemini models. Reports: `evals/results/`.
+**Held-out set.** `evals/heldout.jsonl` was written after all prompt tuning: 44 new questions (38 clear, 6 adversarial) in new wording, including baskets and streaks, each gold answer checked to return real data on the eval account. First and only scored run (Gemini 3.5 Flash-Lite, 2026-11-11):
+
+| Measure | Held-out |
+|---|---|
+| Valid spec | 100% |
+| Result match, clear questions | 97.4% (37/38) |
+| Refusals, adversarial | 100% (6/6) |
+| Number check passed | 100% |
+| Requests / tokens per question | 1.1 / 4,487 |
+
+The one miss ("What was the total lot size of my biggest basket?") was the app's fault, not the model's: the spec was right, but a list sorted by a column did not show that column. The code now always shows it, and the question moved to the tuned set (`seq-07`), so the held-out set has 43 questions for its next run. Report: `evals/results/heldout/`.
+
+**Caveat:** the run 2 changes were made after seeing run 1's failures on these same questions, so run 2 partly measures tuning to this set. Run 1 is the fairer estimate for new questions; the held-out set below is the honest one. The plan's two-model comparison is not done yet: the free tier allows only about 20 requests a day on larger Gemini models. Reports: `evals/results/`.
 
 ## Asking questions (QuerySpec)
 
@@ -196,6 +211,9 @@ docker compose run --rm app query '{"entity": "trades", "filters": [{"field": "h
 - Every answer starts with an interpretation line (account, filters, time range, timezone), so a misread question is visible.
 
 ## Data and secrets
+
+- `make backup` copies every account database (safe while the page runs), the news files and the usage counter to `data/backups/<time>/` and keeps the newest 10 (`KEEP=20` for more). Chats live in the browser and are not included. Copy `data/backups` to another drive now and then.
+- CI (GitHub Actions) runs the tests on Python 3.11 and 3.12 and fails if a database, an MT5 report, a `data/` file, a `.env` file or a Google API key is ever committed.
 
 - Real trade data lives in `data/` (git-ignored). Only synthetic samples are ever committed.
 - Credentials live in `.env` (git-ignored) and are never printed, saved to data files, or passed to the language model. To log in, the `mt5` container writes a startup file into its own `/tmp`, readable only by its user, and deletes it as soon as the terminal is logged in.
@@ -253,13 +271,15 @@ src/tradequery/
   ask.py          question -> spec -> result -> checked answer, with follow-ups
   templates.py    answer sentences written by code for simple results (no second model call)
   usage.py        daily model usage and budget (data/usage.json)
+  auth.py         optional page password (TQ_PASSWORD) and its sign-in page
+  backup.py       make backup: account databases and news files to data/backups/
   verify.py       number checker for the written answer
   api.py          the web API (FastAPI): accounts, ask with follow-up sessions, presets, specs
   web/index.html  the page: one file, no external libraries
   evaluate.py     the eval suite: eval account, matching, scoring, reports
   cli.py          every command (tradequery --help)
 mql5/             ExportCalendar.mq5: exports the MT5 economic calendar
-evals/            questions.jsonl (80 questions with gold specs) and results/
+evals/            questions.jsonl (81 tuned questions), heldout.jsonl (43 held-out) and results/
 docs/             case-study.md, demo-script.md
 docker/mt5/       Wine image and its setup script
 tests/            unit tests (synthetic data and a made-up report; no real accounts)

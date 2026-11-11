@@ -105,7 +105,9 @@ def build_select(spec: QuerySpec, clock: ServerClock):
         order = [(labels[o.field] if o.field in labels else t.c[o.field]) for o in spec.order_by]
         directions = [o.direction for o in spec.order_by]
     else:
-        names = spec.fields or list(ent.default)
+        names = list(spec.fields or ent.default)
+        # a list sorted by a column shows that column: "the biggest basket by lots" must show its lots
+        names += [o.field for o in spec.order_by if o.field not in names]
         stmt = select(*(t.c[n] for n in names)).select_from(t)
         order = [t.c[o.field] for o in spec.order_by]
         directions = [o.direction for o in spec.order_by]

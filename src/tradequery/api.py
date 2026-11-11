@@ -14,6 +14,7 @@
   GET  /api/trade         one trade on a price chart (stored one-minute bars)
   GET  /api/sequence      one martingale/grid sequence on a price chart
   GET  /api/usage         today's model requests and tokens against the daily budget
+  POST /api/login         sign in with TQ_PASSWORD (only when it is set); POST /api/logout signs out
 
 Every request opens exactly one account database, read-only. Answers carry the
 interpretation line, notes, the result table, the spec and the SQL, so the page
@@ -28,7 +29,8 @@ websites open in the same browser must not be able to use it, so:
   header, which a page on another site cannot add without permission this API
   never gives, and must not come from another site's page (Origin, Sec-Fetch-Site);
 - the page may not be framed, and scripts may only talk to this server (CSP).
-TQ_ALLOWED_HOSTS in .env adds host names (comma separated), e.g. for a LAN name.
+TQ_ALLOWED_HOSTS in .env adds host names (comma separated), e.g. for a LAN name;
+that needs TQ_PASSWORD too, and then every request needs a signed-in browser (auth.py).
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import db, syncjobs
+from .auth import COOKIE, LOGIN_PAGE, SESSION_SECONDS, PasswordGate, gate_from_env
 from .ask import Answer, Session, _found_ids, ask, drawdown_default, is_share_column
 from .evaluate import EVAL_LOGIN as SAMPLE_LOGIN
 from .examples import EXAMPLES, with_drawdown_basis
@@ -72,6 +75,8 @@ PAGE_CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 's
 def allowed_hosts_from_env() -> list[str]:
     extra = [h.strip() for h in os.environ.get("TQ_ALLOWED_HOSTS", "").split(",") if h.strip()]
     return [*LOCAL_HOSTS, *extra]
+
+
 MAX_SESSIONS = 200
 MODEL_CALLS_PER_MINUTE = 20
 MAX_REPORT_BYTES = 30 * 1024 * 1024  # a year of busy trading is a few MB
@@ -87,6 +92,10 @@ class PresetBody(BaseModel):
     login: int
     number: int = Field(ge=1)
     session_id: str | None = Field(default=None, max_length=64)
+
+
+class LoginBody(BaseModel):
+    password: str = Field(min_length=1, max_length=200)
 
 
 class QueryBody(BaseModel):
@@ -152,7 +161,8 @@ class RateLimiter:
 
 def create_app(*, data_root: Path | str | None = None, settings: Settings | None = None,
                provider_factory=provider_from_env, allowed_hosts: list[str] | None = None,
-               usage_book: UsageBook | None = None) -> FastAPI:
+               usage_book: UsageBook | None = None, gate: PasswordGate | None | bool = True) -> FastAPI:
+    """gate: True reads TQ_PASSWORD from the environment; None turns the password off; or a PasswordGate."""
     # no API docs page: it loads scripts from a CDN, and nothing here needs it
     app = FastAPI(title="TradeQuery", docs_url=None, redoc_url=None, openapi_url=None)
     root = Path(data_root or data_dir())
@@ -163,6 +173,9 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
     explain_mode = "ai" if os.environ.get("TQ_EXPLAIN", "auto").lower() == "ai" else "auto"
     state: dict = {"provider": None}
     hosts = allowed_hosts or allowed_hosts_from_env()
+    if gate is True:
+        gate = gate_from_env(root, hosts, LOCAL_HOSTS)
+    password_gate: PasswordGate | None = gate or None
 
     @app.middleware("http")
     async def guard(request: Request, call_next):
@@ -172,7 +185,14 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
             foreign_origin = origin and (urlsplit(origin).hostname or "") not in [h.strip("[]") for h in hosts]
             if request.headers.get(REQUEST_HEADER) != "1" or foreign_origin or site in ("cross-site", "same-site"):
                 return JSONResponse({"detail": "This request did not come from the TradeQuery page."}, status_code=403)
-        response = await call_next(request)
+        path = request.url.path
+        if password_gate and path != "/api/login" and not password_gate.valid(request.cookies.get(COOKIE)):
+            if path.startswith("/api/"):
+                response = JSONResponse({"detail": "Sign in first."}, status_code=401)
+            else:
+                response = HTMLResponse(LOGIN_PAGE)
+        else:
+            response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "DENY"
@@ -219,6 +239,25 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
     @app.get("/", response_class=HTMLResponse)
     def page():
         return PAGE.read_text(encoding="utf-8")
+
+    @app.post("/api/login")
+    def login(body: LoginBody, request: Request):
+        if password_gate is None:
+            raise HTTPException(404, "No password is set (TQ_PASSWORD).")
+        if password_gate.locked():
+            raise HTTPException(429, "Too many wrong passwords. Wait 5 minutes.")
+        if not password_gate.check(body.password):
+            raise HTTPException(401, "Wrong password.")
+        response = JSONResponse({"ok": True})
+        response.set_cookie(COOKIE, password_gate.new_cookie(), max_age=SESSION_SECONDS, httponly=True,
+                            samesite="strict", secure=request.url.scheme == "https", path="/")
+        return response
+
+    @app.post("/api/logout")
+    def logout():
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(COOKIE, path="/")
+        return response
 
     @app.get("/api/accounts")
     def accounts():
@@ -291,9 +330,9 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
     def status():
         try:
             p = provider()
-            return {"model": f"{p.name} {p.model}", "ready": True}
+            return {"model": f"{p.name} {p.model}", "ready": True, "login_required": password_gate is not None}
         except HTTPException as error:
-            return {"model": None, "ready": False, "message": error.detail}
+            return {"model": None, "ready": False, "message": error.detail, "login_required": password_gate is not None}
 
     @app.get("/api/usage")
     def usage_today():

@@ -164,10 +164,43 @@ def test_gemini_retries_once_on_a_temporary_server_error():
         p._client = SimpleNamespace(models=FakeModels(failures))
         return p
 
-    once = provider([503])
-    assert once.generate("s", "p")[0] == "ok" and once._client.models.calls == 2
+    twice = provider([503, 503])
+    assert twice.generate("s", "p")[0] == "ok" and twice._client.models.calls == 3
     with pytest.raises(LLMError, match="503"):
-        provider([503, 503]).generate("s", "p")
+        provider([503, 503, 503]).generate("s", "p")
+
+
+def test_network_failures_are_retried_then_reported_politely():
+    import httpx
+    from types import SimpleNamespace
+
+    from google.genai import errors, types
+
+    from tradequery.llm import GeminiProvider
+
+    class Flaky:
+        def __init__(self, failures):
+            self.failures, self.calls = failures, 0
+
+        def generate_content(self, **kwargs):
+            self.calls += 1
+            if self.failures:
+                raise self.failures.pop(0)
+            meta = SimpleNamespace(prompt_token_count=10, candidates_token_count=5, thoughts_token_count=0)
+            return SimpleNamespace(text="ok", usage_metadata=meta, prompt_feedback=None)
+
+    def provider(failures):
+        p = object.__new__(GeminiProvider)
+        p._types, p._errors, p.model, p._sleep = types, errors, "m", lambda s: None
+        p._client = SimpleNamespace(models=Flaky(failures))
+        return p
+
+    once = provider([httpx.ReadTimeout("timed out")])
+    assert once.generate("s", "p")[0] == "ok" and once._client.models.calls == 2
+    with pytest.raises(LLMError, match="Could not reach Gemini"):
+        provider([httpx.ConnectError("dns")] * 3).generate("s", "p")
+    with pytest.raises(ValueError):  # a bug is not a network error: it is not hidden
+        provider([ValueError("bug")]).generate("s", "p")
 
 
 def test_drawdown_default_follows_the_account():
