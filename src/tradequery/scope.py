@@ -108,7 +108,26 @@ def describe(spec: QuerySpec | None, result: Result | None, *, has_equity: bool,
     elif spec.entity == "trades" and has_baskets and model_ready and not filters & set(DRILL_DOWN_FIELDS):
         switches.append({"label": "Ask the same per basket", "kind": "ask",
                          "question": _again(question, "per basket instead of single trades")})
-    return {"level": level_label(spec), "labels": labels, "switches": switches}
+    return {"level": level_label(spec), "labels": labels, "switches": switches,
+            "headline": headline(spec, result)}
+
+
+# The number an answer card shows large, in order of preference, when the answer is a single row.
+HEADLINE_COLUMNS = ("drawdown_pct", "depth_pct", "win_rate", "net_profit", "net_pnl", "net", "total", "depth_abs",
+                    "drawdown_abs", "profit_factor", "length", "gross_lots", "amount", "swap_total")
+
+
+def headline(spec: QuerySpec, result: Result) -> dict | None:
+    """The one number a single-row answer is about ({"column", "value"}), or None for lists and tables."""
+    if len(result.rows) != 1 or spec.group_by or spec.compare:
+        return None
+    row = dict(zip(result.columns, result.rows[0]))
+    numeric = [c for c, v in row.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
+               and not c.endswith("_id") and c not in ("is_win", "news_overlap")]
+    preferred = [m for m in spec.metrics if m in numeric] + [c for c in HEADLINE_COLUMNS if c in numeric] + numeric
+    if not preferred:
+        return None
+    return {"column": preferred[0], "value": row[preferred[0]]}
 
 
 def _again(question: str, how: str) -> str:
