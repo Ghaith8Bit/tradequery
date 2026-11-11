@@ -896,6 +896,11 @@ function renderAnswer(bubble, data) {
   if (r && h) bubble.appendChild(headlineNode(h, r));
   if (data.text) bubble.appendChild(el("div", { class: "answer-text" }, data.text));
   if (data.error) bubble.appendChild(el("div", { class: "error" }, data.error));
+  if (data.error_detail) {
+    const why = el("details", { class: "details" });
+    why.append(el("summary", {}, "Why"), el("div", { class: "interp" }, data.error_detail));
+    bubble.appendChild(why);
+  }
   if (!r) return;
   r.notes.forEach((n) => bubble.appendChild(el("div", { class: "note" }, n)));
   const chart = autoChart(r);

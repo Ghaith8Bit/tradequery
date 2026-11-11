@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from .examples import trades_in, with_drawdown_basis
 from .execute import Result
-from .spec import QuerySpec
+from .spec import ENTITIES, QuerySpec
 
 LEVELS = {
     "trades": "Single trades",
@@ -29,6 +29,31 @@ GROUPS = {"drawdown_episodes": "Account", "cash_flows": "Account", "exposure": "
           "sequences": "Baskets", "trades": "Trades", "streaks": "Trades", "news_events": "Account"}
 
 DRILL_DOWN_FIELDS = ("sequence_id", "drawdown_episode_id", "equity_drawdown_episode_id", "streak_id", "position_id")
+
+
+# The same idea under another name at the other level; metrics are trade-only, these three have basket forms.
+TRADE_TO_BASKET = {"net_profit": "net_pnl", "lots": "total_lots"}
+BASKET_TO_TRADE = {v: k for k, v in TRADE_TO_BASKET.items()}
+METRICS_WITH_BASKET_FORM = {"win_rate", "net_profit", "trade_count"}
+
+
+def _fields_used(spec: QuerySpec) -> set[str]:
+    used = {f.field for f in spec.filters} | {f.field for c in spec.compare for f in c.filters}
+    used |= set(spec.group_by) | {a.field for a in spec.aggregations if a.field}
+    named = {a.alias for a in spec.aggregations} | set(spec.metrics)
+    return used | {o.field for o in spec.order_by if o.field not in named}
+
+
+def fits_level(spec: QuerySpec, target: str) -> bool:
+    """Can this question be asked again at the other level (trades <-> sequences) without a field it lacks?"""
+    if target == "sequences":
+        if not set(spec.metrics) <= METRICS_WITH_BASKET_FORM:
+            return False
+        rename = TRADE_TO_BASKET
+    else:
+        rename = BASKET_TO_TRADE
+    fields = ENTITIES[target].fields
+    return all(rename.get(f, f) in fields for f in _fields_used(spec))
 
 
 def basis_of(spec: QuerySpec) -> str | None:
@@ -102,10 +127,11 @@ def describe(spec: QuerySpec | None, result: Result | None, *, has_equity: bool,
             switches.append({"label": "Show the trades in this basket", "kind": "spec",
                              "question": "Which trades were in this basket?",
                              "spec": trades_in("sequence_id", one[col["sequence_id"]])})
-        if model_ready:
+        if model_ready and fits_level(spec, "trades"):
             switches.append({"label": "Ask the same for single trades", "kind": "ask",
                              "question": _again(question, "for single trades instead of baskets")})
-    elif spec.entity == "trades" and has_baskets and model_ready and not filters & set(DRILL_DOWN_FIELDS):
+    elif (spec.entity == "trades" and has_baskets and model_ready and not filters & set(DRILL_DOWN_FIELDS)
+          and fits_level(spec, "sequences")):
         switches.append({"label": "Ask the same per basket", "kind": "ask",
                          "question": _again(question, "per basket instead of single trades")})
     return {"level": level_label(spec), "labels": labels, "switches": switches,
@@ -142,5 +168,5 @@ def account_levels(conn) -> dict:
     """What this account can answer: equity drawdowns (price bars) and baskets."""
     has_equity = conn.execute("SELECT 1 FROM drawdown_episodes WHERE basis = 'equity' LIMIT 1").fetchone() is not None
     has_baskets = conn.execute("SELECT 1 FROM sequences LIMIT 1").fetchone() is not None
-    basket_dd = conn.execute("SELECT 1 FROM sequence_facts LIMIT 1").fetchone() is not None
+    basket_dd = conn.execute("SELECT 1 FROM sequence_facts WHERE drawdown_pct IS NOT NULL LIMIT 1").fetchone() is not None
     return {"has_equity": has_equity, "has_baskets": has_baskets, "has_basket_drawdown": basket_dd}
