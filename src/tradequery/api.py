@@ -50,7 +50,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import db, syncjobs
 from .auth import COOKIE, LOGIN_PAGE, SESSION_SECONDS, PasswordGate, gate_from_env
-from .ask import Answer, Session, _found_ids, ask, drawdown_default, is_share_column
+from .ask import Answer, Session, _found_ids, ask, checked_template, drawdown_default, is_share_column
 from .evaluate import EVAL_LOGIN as SAMPLE_LOGIN
 from .examples import EXAMPLES, with_drawdown_basis
 from .execute import QueryTimeout, Result, execute
@@ -378,6 +378,11 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
             answer.error = str(error)
         if spec.kind != "query":
             answer.text = spec.message
+        elif answer.result is not None:
+            # suggested questions and switch buttons use no model, but still get a checked plain sentence
+            text = checked_template(question, spec, answer.result)
+            if text:
+                answer.text, answer.verified, answer.text_source = text, True, "template"
         if session_id and answer.result is not None:
             # a switch button keeps the conversation going: the next follow-up starts from this answer
             session = sessions.pop(session_id, None) or Session()

@@ -101,6 +101,9 @@ Values and conventions:
   drawdown_pct (a share of account equity when the basket opened: 0.6 = 60%; null without price bars). "Baskets
   that went to -60%" means drawdown_pct gte 0.6. A plain "drawdown" without "basket" is the account drawdown
   (drawdown_episodes).
+- The account at a moment or over a period (equity, balance, open trades' result): equity_curve, with time_range.
+  "Lowest equity on 2026-09-28": aggregations min equity. "Equity at Friday's close": order time_utc desc, limit 1,
+  time_range ending that day. Stop-outs are trades with close_reason "so".
 - Drawdown basis: when a question does not say balance or equity, use the "Drawdown default" from the account
   context. On an equity account, "maximum drawdown" is the deepest equity episode (drawdown_episodes, basis
   equity, order depth_abs desc, limit 1), not the max_drawdown metric, which counts closed trades only.
@@ -191,6 +194,7 @@ def account_context(path, settings: Settings) -> str:
         reasons = [r[0] for r in conn.execute("SELECT DISTINCT close_reason FROM trades WHERE close_reason != '' ORDER BY 1")]
         news = conn.execute("SELECT COUNT(*) FROM news_events").fetchone()[0]
         equity = drawdown_default(conn) == "equity"
+        curve = conn.execute("SELECT MIN(time_utc), MAX(time_utc) FROM equity_curve").fetchone()
     finally:
         conn.close()
     server = lambda t: settings.clock.from_utc(db.parse_time(t)).strftime("%Y-%m-%d %H:%M") if t else "?"  # noqa: E731
@@ -203,6 +207,8 @@ def account_context(path, settings: Settings) -> str:
             f"close_reason values: {', '.join(reasons) or 'none'} (sl stop loss, tp take profit, so stop-out, "
             f"client/mobile/web manual, expert by the EA).\n"
             f"Economic calendar loaded: {'yes' if news else 'no (news questions will find no overlap)'}.\n"
+            + (f"equity_curve (balance, floating_pnl, equity minute by minute): {server(curve[0])} to {server(curve[1])}.\n"
+               if curve and curve[0] else "equity_curve: empty (no price bars stored).\n") +
             f"Drawdown default: " + ("equity (open positions counted; balance drawdowns are there too)." if equity
                                      else "balance (no price bars are stored, so there are no equity drawdowns)."))
 
@@ -282,6 +288,17 @@ def plain_words(text: str) -> str:
     return text
 
 
+def checked_template(question: str, spec: QuerySpec, result: Result) -> str | None:
+    """The code-written sentence for a simple result, only if every number in it checks out (else None)."""
+    text = template_answer(spec, result, question)
+    if not text:
+        return None
+    text = plain_words(text)
+    check = check_numbers(text, result.rows[:EXPLAIN_ROWS], extra_numbers=_numbers_in(spec),
+                          extra_text=[question, result.interpretation, *result.notes])
+    return text if check.ok else None
+
+
 def _count_total(spec: QuerySpec, result: Result) -> int | None:
     """How many items a table of groups covers, so the model never adds the counts up itself."""
     if result.truncated or not result.rows:
@@ -353,13 +370,10 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
 
     # A simple result (empty, one row, a plain list) gets a sentence written by code: no second call.
     if explain == "auto":
-        text = template_answer(spec, result)
+        text = checked_template(question, spec, result)
         if text:
-            text = plain_words(text)
-            check = check_numbers(text, result.rows[:EXPLAIN_ROWS], extra_numbers=_numbers_in(spec), extra_text=extra_text)
-            if check.ok:
-                answer.text, answer.verified, answer.text_source = text, True, "template"
-                return answer
+            answer.text, answer.verified, answer.text_source = text, True, "template"
+            return answer
 
     # Call 2: result -> short answer, every number checked, one retry
     table = _table_text(result)
