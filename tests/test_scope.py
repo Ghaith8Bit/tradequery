@@ -50,6 +50,19 @@ def test_baskets_and_trades_switch_to_each_other():
     assert describe(legs, result([], []), has_equity=True, has_baskets=True)["switches"] == []
 
 
+def test_a_single_row_answer_has_a_headline_number():
+    from tradequery.scope import headline
+
+    basket = parse_spec({"entity": "sequences", "limit": 1})
+    row = result(["sequence_id", "depth", "net_pnl", "is_win", "drawdown_abs", "drawdown_pct"],
+                 [[222, 7, 73.78, 1, 2544.76, 0.2486]])
+    assert headline(basket, row) == {"column": "drawdown_pct", "value": 0.2486}
+    metrics = parse_spec({"entity": "trades", "metrics": ["profit_factor", "win_rate"]})
+    assert headline(metrics, result(["profit_factor", "win_rate"], [[0.97, 0.62]]))["column"] == "profit_factor"
+    assert headline(basket, result(["sequence_id"], [[1], [2]])) is None  # a list has no single number
+    assert headline(basket, result(["sequence_id", "symbol"], [[1, "XAUUSD"]])) is None
+
+
 def test_clarify_answers_have_no_scope():
     assert describe(parse_spec({"kind": "clarify", "message": "How big?"}), None, has_equity=True,
                     has_baskets=True) is None

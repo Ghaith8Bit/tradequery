@@ -68,7 +68,12 @@ def test_the_overview_for_the_start_screen(root):
     days = [d for d, _ in o["by_weekday"]]
     assert days[:5] == ["Mon", "Tue", "Wed", "Thu", "Fri"]
     assert round(sum(v for _, v in o["by_weekday"]), 2) == round(o["stats"]["net_profit"], 2)
-    assert all(f["level"] in ("warn", "info") and f["text"] for f in o["facts"])
+    assert all(f["level"] in ("warn", "info") and f["text"] and f["icon"] for f in o["facts"])
+    # the calendar: one entry per close day, adding up to the net result
+    assert o["daily"] and sum(n for _, _, n in o["daily"]) == 48
+    assert round(sum(v for _, v, _ in o["daily"]), 2) == round(o["stats"]["net_profit"], 2)
+    assert [m for m, _ in o["monthly"]] == sorted({d[:7] for d, _, _ in o["daily"]})
+    assert o["stats"]["baskets"] > 0 and 0 <= o["stats"]["basket_win_rate"] <= 1
     assert fake.calls == []  # the overview never calls the model
     assert c.get("/api/overview", params={"login": 4242}).status_code == 404
 

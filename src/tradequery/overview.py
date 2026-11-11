@@ -36,6 +36,7 @@ def build_overview(path: Path, settings: Settings) -> dict:
             "ORDER BY depth DESC, net_pnl ASC LIMIT 1"
         ).fetchone()
         deep_count = conn.execute("SELECT COUNT(*), SUM(is_win) FROM sequences WHERE depth >= 6").fetchone()
+        baskets = conn.execute("SELECT COUNT(*), SUM(is_win) FROM sequences").fetchone()
         no_stop = conn.execute("SELECT COUNT(*) FROM tags WHERE rule = 'no_stop_loss'").fetchone()[0]
         equity_dd = conn.execute("SELECT depth_abs, depth_pct FROM drawdown_episodes WHERE basis = 'equity' "
                                  "ORDER BY depth_abs DESC LIMIT 1").fetchone()
@@ -53,7 +54,7 @@ def build_overview(path: Path, settings: Settings) -> dict:
         "balance": account.get("balance"), "trades": len(trades),
         "first": db.format_time(trades[0].open_time_utc) if trades else None,
         "last": db.format_time(trades[-1].close_time_utc) if trades else None,
-        "stats": None, "balance_curve": [], "by_weekday": [], "facts": [],
+        "stats": None, "balance_curve": [], "by_weekday": [], "facts": [], "daily": [], "monthly": [],
     }
     if not trades:
         return out
@@ -70,6 +71,8 @@ def build_overview(path: Path, settings: Settings) -> dict:
         "deepest_sequence": ({"depth": deepest[0], "multiplier": deepest[1], "net": deepest[2], "start": deepest[3],
                                   "id": deepest[4]}
                              if deepest else None),
+        "baskets": baskets[0] or 0,
+        "basket_win_rate": (baskets[1] or 0) / baskets[0] if baskets[0] else None,
         "worst_basket": ({"id": worst_basket[0], "drawdown": worst_basket[1], "drawdown_pct": worst_basket[2],
                           "is_win": bool(worst_basket[3])} if worst_basket else None),
         "worst_winning_basket": ({"id": worst_winner[0], "drawdown": worst_winner[1], "drawdown_pct": worst_winner[2]}
@@ -81,31 +84,43 @@ def build_overview(path: Path, settings: Settings) -> dict:
     for t in trades:
         by_day[t.weekday] = by_day.get(t.weekday, 0.0) + (t.net_profit or 0.0)
     out["by_weekday"] = [(d, round(v, 2)) for d, v in by_day.items() if v or d not in ("Sat", "Sun")]
+    # the daily result calendar and month totals, by close date in broker server time
+    daily: dict[str, list] = {}
+    for t in trades:
+        day = settings.clock.from_utc(t.close_time_utc).strftime("%Y-%m-%d")
+        entry = daily.setdefault(day, [0.0, 0])
+        entry[0] += t.net_profit or 0.0
+        entry[1] += 1
+    out["daily"] = [(d, round(v[0], 2), v[1]) for d, v in sorted(daily.items())]
+    months: dict[str, float] = {}
+    for d, net, _ in out["daily"]:
+        months[d[:7]] = months.get(d[:7], 0.0) + net
+    out["monthly"] = [(m, round(v, 2)) for m, v in sorted(months.items())]
 
     facts = []
     if no_stop:
-        facts.append({"level": "warn" if no_stop * 2 >= len(trades) else "info",
+        facts.append({"icon": "shield", "level": "warn" if no_stop * 2 >= len(trades) else "info",
                       "text": f"{no_stop} of {len(trades)} trades had no stop loss at entry."})
     stop_outs = sum(1 for t in trades if t.close_reason == "so")
     if stop_outs:
-        facts.append({"level": "warn", "text": f"{stop_outs} positions were closed by a stop-out."})
+        facts.append({"icon": "alert", "level": "warn", "text": f"{stop_outs} positions were closed by a stop-out."})
     if deep_count and deep_count[0]:
         won = deep_count[1] or 0
-        facts.append({"level": "warn", "text": f"{deep_count[0]} baskets (martingale or grid) went 6 or more levels "
+        facts.append({"icon": "stack", "level": "warn", "text": f"{deep_count[0]} baskets (martingale or grid) went 6 or more levels "
                                                f"deep; {won} of them closed in profit."})
     if worst_basket and worst_basket[2] >= 0.3:
-        facts.append({"level": "warn", "text": f"Basket drawdown: the deepest basket went {worst_basket[2] * 100:.1f}% "
+        facts.append({"icon": "stack", "level": "warn", "text": f"Basket drawdown: the deepest basket went {worst_basket[2] * 100:.1f}% "
                                                f"of equity into the red before it closed"
                                                + (" in profit." if worst_basket[3] else ".")})
     if worst_winner and worst_winner[2] > 0 and (not worst_basket or worst_winner[0] != worst_basket[0]):
-        facts.append({"level": "info", "text": f"Basket drawdown: the deepest winning basket went "
+        facts.append({"icon": "stack", "level": "info", "text": f"Basket drawdown: the deepest winning basket went "
                                                f"{worst_winner[2] * 100:.1f}% of equity into the red before closing "
                                                "in profit."})
     if equity_dd and equity_dd[1] is not None and equity_dd[1] >= 0.5:
-        facts.append({"level": "warn", "text": f"Account drawdown (equity): the deepest, open positions counted, took "
+        facts.append({"icon": "trend", "level": "warn", "text": f"Account drawdown (equity): the deepest, open positions counted, took "
                                                f"{equity_dd[1] * 100:.1f}% of the money at stake."})
     elif not equity_dd and m["max_drawdown_pct"] is not None and m["max_drawdown_pct"] >= 0.5:
-        facts.append({"level": "warn", "text": f"Account drawdown (balance): the deepest took {m['max_drawdown_pct'] * 100:.1f}% "
+        facts.append({"icon": "trend", "level": "warn", "text": f"Account drawdown (balance): the deepest took {m['max_drawdown_pct'] * 100:.1f}% "
                                                "of the money at stake."})
     out["facts"] = facts
     return out
