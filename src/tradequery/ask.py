@@ -26,6 +26,7 @@ from .execute import QueryTimeout, Result, execute
 from .llm import LLMError, Provider, Usage
 from .scope import level_meaning
 from .settings import Settings
+from .templates import NOUNS as _NOUN, template_answer
 from .spec import ENTITIES, MAX_ROWS, METRIC_DEFINITIONS, OPERATORS, QuerySpec, SpecError, parse_spec
 from .verify import check_numbers
 
@@ -49,7 +50,13 @@ def _example_question(question: str, spec: dict) -> str:
     return question
 
 
-SPEC_SYSTEM = f"""You turn a trader's question about their own MT5 trading account into a QuerySpec: one JSON object.
+def _short(definition: str, limit: int = 110) -> str:
+    """The first sentence of a metric definition: the model needs what it is, not every caveat."""
+    first = re.split(r"(?<=[.;:])\s", definition.strip(), maxsplit=1)[0].rstrip(".;:")
+    return first if len(first) <= limit else first[:limit].rsplit(" ", 1)[0] + "…"
+
+
+SPEC_RULES = f"""You turn a trader's question about their own MT5 trading account into a QuerySpec: one JSON object.
 You never write SQL and never calculate numbers yourself; code runs the spec and computes everything.
 
 QuerySpec fields (omit what you do not need):
@@ -73,7 +80,7 @@ Entities:
 {_schema_text()}
 
 Named metrics:
-{chr(10).join(f"- {k}: {v}" for k, v in METRIC_DEFINITIONS.items())}
+{chr(10).join(f"- {k}: {_short(v)}" for k, v in METRIC_DEFINITIONS.items())}
 
 Tags (filter field "tags"): {", ".join(RULES)}.
 
@@ -122,10 +129,12 @@ Follow-ups: when a previous question and spec are given and the new question onl
 previous answer found ("which trades were in it?") uses the ids listed under "Previous result".
 
 Reply with the JSON object only.
-
-Worked examples:
-{chr(10).join(f"Q: {_example_question(q, s)}{chr(10)}{json.dumps(s)}" for q, s in EXAMPLES)}
 """
+
+
+SPEC_SYSTEM = (SPEC_RULES + "\nWorked examples:\n"
+               + "\n".join(f"Q: {_example_question(q, s)}\n{json.dumps(s, separators=(',', ':'))}" for q, s in EXAMPLES)
+               + "\n")
 
 
 EXPLAIN_SYSTEM = """You answer a trader's question about their own MT5 account in one to three short sentences,
@@ -135,9 +144,11 @@ using only the result table you are given.
   averages or counts of your own).
 - Write dates as YYYY-MM-DD and times as HH:MM.
 - If the table is empty, say that nothing matched. If a note says trades were left out, mention it.
-- Start with what was counted, as the Level line says: "Across 12 baskets ...", "Your account drawdown (equity)
-  ...", "Of the 76 trades ...", "Across your trades ...". A count must be a count column in the table or the
+- Start with what was counted, as the Level line says: "Across N baskets ...", "Your account drawdown (equity)
+  ...", "Of the N trades ...", "Across your trades ..." (N from the table, never from these instructions). A count must be a count column in the table or the
   Rows number; with no Rows line, the table is a summary: state no count unless a count column shows one.
+  For groups or compared sets with no total on the Rows line, never add their counts up: start with "Across
+  your trades" or name each group's own count.
 - Say "basket", never "sequence". Never write a bare "drawdown": say "account drawdown (equity)", "account
   drawdown (balance)" or "basket drawdown", as the Level line and the columns show.
 - News: say a result "overlapped" news, never that news caused it.
@@ -164,6 +175,7 @@ class Answer:
     unsupported_numbers: list[str] = field(default_factory=list)
     error: str | None = None
     error_detail: str | None = None  # the technical reason, shown folded away
+    text_source: str | None = None  # "template" (written by code) or "model"
     spec_attempts: int = 0
     usage: Usage = field(default_factory=Usage)
 
@@ -270,6 +282,18 @@ def plain_words(text: str) -> str:
     return text
 
 
+def _count_total(spec: QuerySpec, result: Result) -> int | None:
+    """How many items a table of groups covers, so the model never adds the counts up itself."""
+    if result.truncated or not result.rows:
+        return None
+    names = {"trade_count", "trades"} | {a.alias for a in spec.aggregations if a.func == "count"}
+    col = next((i for i, c in enumerate(result.columns) if c in names), None)
+    if col is None:
+        return None
+    values = [r[col] for r in result.rows]
+    return sum(values) if all(isinstance(v, int) for v in values) else None
+
+
 def _numbers_in(spec: QuerySpec) -> list[float]:
     out: list[float] = [spec.limit] if spec.limit else []
     for f in [*spec.filters, *(f for c in spec.compare for f in c.filters)]:
@@ -279,10 +303,13 @@ def _numbers_in(spec: QuerySpec) -> list[float]:
     return out
 
 
-def ask(question: str, path, settings: Settings, provider: Provider, session: Session | None = None) -> Answer:
+def ask(question: str, path, settings: Settings, provider: Provider, session: Session | None = None, *,
+        explain: str = "auto") -> Answer:
+    """Answer one question. ``explain``: "auto" writes simple answers from a template, "ai" always asks the model."""
     answer = Answer(question)
     context = account_context(path, settings)
     prompt = _spec_prompt(question, context, session)
+    # a follow-up ("only gold") picks its examples with the question it refines
 
     # Call 1: question -> spec, one retry with the validation error
     error = None
@@ -320,24 +347,40 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
         session.question, session.spec = question, answer.spec.model_dump(mode="json", exclude_defaults=True)
         session.found = _found_ids(answer.result)
 
-    # Call 2: result -> short answer, every number checked, one retry
     result = answer.result
-    table = _table_text(result)
     spec = answer.spec
+    extra_text = [question, result.interpretation, *result.notes]
+
+    # A simple result (empty, one row, a plain list) gets a sentence written by code: no second call.
+    if explain == "auto":
+        text = template_answer(spec, result)
+        if text:
+            text = plain_words(text)
+            check = check_numbers(text, result.rows[:EXPLAIN_ROWS], extra_numbers=_numbers_in(spec), extra_text=extra_text)
+            if check.ok:
+                answer.text, answer.verified, answer.text_source = text, True, "template"
+                return answer
+
+    # Call 2: result -> short answer, every number checked, one retry
+    table = _table_text(result)
     # The row count is a count of things only for a plain list (or of groups); a summary row is not "1 trade".
     summary = (spec.metrics or spec.aggregations) and not spec.group_by and not spec.compare
-    rows_line = "" if summary else (f"Rows: {len(result.rows)} groups\n" if spec.group_by or spec.compare
-                                    else f"Rows: {len(result.rows)}, each one listed item\n")
-    explain = (f"Question: {question}\nLevel: {level_meaning(spec)}\n{rows_line}"
-               f"Interpretation: {result.interpretation}\n"
-               + "".join(f"Note: {n}\n" for n in result.notes) + f"Result table:\n{table}")
+    # groups split the items, so their counts add up; compare sets may overlap, so they get no total
+    total = _count_total(spec, result) if spec.group_by and not spec.compare and "tags" not in spec.group_by else None
+    rows_line = "" if summary else (
+        f"Rows: {len(result.rows)} groups" + (f", {total} {_NOUN.get(spec.entity, 'item')}s in all" if total else "") + "\n"
+        if spec.group_by or spec.compare else f"Rows: {len(result.rows)}, each one listed item\n")
+    # the account number stays on this computer: the model sees the interpretation without it
+    interpretation = re.sub(r"^account \d+; ", "", result.interpretation)
+    explain_prompt = (f"Question: {question}\nLevel: {level_meaning(spec)}\n{rows_line}"
+                      f"Interpretation: {interpretation}\n"
+                      + "".join(f"Note: {n}\n" for n in result.notes) + f"Result table:\n{table}")
     allowed_rows = result.rows[:EXPLAIN_ROWS]
-    extra_numbers = _numbers_in(spec) + ([] if summary else [len(result.rows)])
-    extra_text = [question, result.interpretation, *result.notes]
+    extra_numbers = _numbers_in(spec) + ([] if summary else [len(result.rows)]) + ([total] if total else [])
     problem = None
     for attempt in (1, 2):
-        request = explain if problem is None else (
-            f"{explain}\n\nYour previous answer used numbers that are not in the table: {', '.join(problem)}. "
+        request = explain_prompt if problem is None else (
+            f"{explain_prompt}\n\nYour previous answer used numbers that are not in the table: {', '.join(problem)}. "
             "Write it again using only numbers from the table.")
         try:
             reply, usage = provider.generate(EXPLAIN_SYSTEM, request)
@@ -347,7 +390,7 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
         answer.usage.add(usage)
         check = check_numbers(reply, allowed_rows, extra_numbers=extra_numbers, extra_text=extra_text)
         if check.ok:
-            answer.text, answer.verified = plain_words(reply.strip()), True
+            answer.text, answer.verified, answer.text_source = plain_words(reply.strip()), True, "model"
             return answer
         problem = check.unsupported
     answer.unsupported_numbers = problem or []

@@ -121,6 +121,7 @@
   pre { background: var(--code); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12px; white-space: pre-wrap;
         word-break: break-word; margin: 6px 0; }
   .usage { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .usage-line { font-size: 11.5px; color: var(--muted); margin-top: 4px; min-height: 1em; }
   .typing { display: inline-flex; gap: 4px; padding: 6px 2px; }
   .typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
   .typing span:nth-child(2) { animation-delay: .2s; } .typing span:nth-child(3) { animation-delay: .4s; }
@@ -269,6 +270,7 @@
     <div class="history-title">Chats</div>
     <div class="history" id="history"></div>
     <div class="model"><span class="dot" id="modelDot"></span><span id="modelText">checking the AI model…</span></div>
+    <div class="usage-line" id="usageLine" title="AI use today (UTC). Suggested questions and the calendar use none."></div>
   </aside>
   <div class="backdrop" id="backdrop"></div>
 
@@ -324,7 +326,7 @@ function svg(tag, attrs = {}, text) {
   return node;
 }
 async function api(path, body) {
-  const opts = body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
+  const opts = body ? { method: "POST", headers: { "Content-Type": "application/json", "X-TradeQuery": "1" }, body: JSON.stringify(body) } : {};
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Request failed (${res.status})`);
@@ -960,7 +962,8 @@ function renderAnswer(bubble, data) {
   if (data.spec) details.appendChild(el("pre", {}, JSON.stringify(data.spec, null, 2)));
   if (r.sql) details.appendChild(el("pre", {}, r.sql));
   details.appendChild(el("div", { class: "usage" }, data.model
-    ? `${data.model} · ${data.usage.requests} requests · ${data.usage.input_tokens + data.usage.output_tokens} tokens`
+    ? `${data.model} · ${data.usage.requests} ${data.usage.requests === 1 ? "request" : "requests"} · ${data.usage.input_tokens + data.usage.output_tokens} tokens`
+      + (data.text_source === "template" ? " · answer written from a template, no second AI call" : "")
     : "No AI call: a hand-written query"));
   bubble.appendChild(details);
 }
@@ -1029,8 +1032,18 @@ async function send(question, request) {
   chat.messages.push({ role: "bot", data: trimForStorage(data) });
   store.save(state.login, state.chats);
   box.scrollIntoView({ behavior: "smooth", block: "start" });
+  refreshUsage();
   state.busy = false;
   updateSend();
+}
+async function refreshUsage() {
+  try {
+    const u = await api("/api/usage");
+    const tokens = u.input_tokens + u.output_tokens;
+    const calls = `Today: ${u.requests}${u.request_limit ? " of " + u.request_limit : ""} AI calls`;
+    const toks = `${Math.round(tokens / 1000)}k${u.token_limit ? " of " + Math.round(u.token_limit / 1000) + "k" : ""} tokens`;
+    $("usageLine").textContent = `${calls} · ${toks}`;
+  } catch { $("usageLine").textContent = ""; }
 }
 function askPreset(p) {
   send(p.question, (chat) => api("/api/preset", { login: state.login, number: p.number, session_id: chat.sessionId }));
@@ -1177,7 +1190,7 @@ async function uploadReport(file) {
   busyButton(b, "Reading…");
   toast(`Reading ${file.name}…`, { stay: true });
   try {
-    const res = await fetch("/api/import", { method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file });
+    const res = await fetch("/api/import", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-TradeQuery": "1" }, body: file });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `Upload failed (${res.status})`);
     toast(data.new_deals
@@ -1226,6 +1239,7 @@ async function start() {
     state.modelReady = s.ready;
     $("modelDot").className = "dot " + (s.ready ? "ok" : "warn");
     $("modelText").textContent = s.ready ? `AI: ${s.model}` : "No AI model: suggested questions only";
+    if (s.ready) refreshUsage();
   } catch {
     $("modelText").textContent = "AI status unknown";
   }

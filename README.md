@@ -49,7 +49,7 @@ the page or run `make ask Q="What is my win rate?"`. Without a key the example q
 
 80 questions with hand-written gold answers, 10 of them adversarial, scored on the sample account. Gemini 3.5
 Flash-Lite, free tier: **result match 91.4% on the first run (100% after prompt fixes), adversarial refusals 100%,
-number check 100%, 3.9 s and $0 per question.** Details and caveats: [Eval results](#eval-results).
+number check 100%, 1.2 model requests and $0 per question.** Details and caveats: [Eval results](#eval-results).
 
 ## Running on your own account
 
@@ -120,7 +120,13 @@ A chat page that also works on a phone:
 - **Sync now:** downloads new trades from MT5 without the terminal. `make web` also starts a small **sync worker** in the Wine image when MT5 is set up. The page asks it to sync through files in `data/sync/`; your credentials stay in `.env` and never pass through the page. To also sync on a timer, set `SYNC_EVERY_MINUTES` in `.env`. The sidebar shows when the account was last updated.
 - **Trade charts:** click any trade or basket number in an answer (or a basket tile) to see it on a candle chart. The chart is built from the stored one-minute bars and marks every entry, exit, stop loss and take profit. Hours without prices, such as weekends, are skipped and marked.
 
-The API behind it (FastAPI, `/api/docs`) opens one account database per request (read-only, except for uploads) and rate limits model calls.
+The API behind it (FastAPI) opens one account database per request (read-only, except for uploads), rate limits model calls, and keeps a daily AI budget (below).
+
+**Keeping other websites out.** The page is published on 127.0.0.1 only, but any website open in the same browser could still try to talk to it. So the API:
+
+- answers only to the host names `localhost`, `127.0.0.1` and `[::1]` (this stops DNS rebinding; add names with `TQ_ALLOWED_HOSTS` in `.env`);
+- accepts a POST (ask, sync, upload) only with the page's `X-TradeQuery` header and not from another site's page (`Origin`, `Sec-Fetch-Site`);
+- sends a Content-Security-Policy, refuses to be framed, and marks answers `no-store`. There is no API docs page, since it would load scripts from a CDN.
 
 ## Asking in plain English
 
@@ -135,7 +141,15 @@ Needs `GEMINI_API_KEY` in `.env` (Google AI Studio, free tier available). Two mo
 1. **Question -> QuerySpec.** The model gets the schema, the plan's example questions, the account's date range, symbols and magic numbers, and the previous spec for follow-ups. An invalid spec goes back once with the validation error.
 2. **Result -> a short answer.** The model sees only the question, the interpretation line and the result table. `verify.py` checks every number in the answer against the table (allowing rounding, percentages and signs); one retry on a mismatch, then the table is shown without prose.
 
-Every answer prints the request and token count, so free-tier usage is visible. Trade comments and credentials never reach the model.
+Every answer prints the request and token count, so free-tier usage is visible. Trade comments, credentials and the account number never reach the model.
+
+**Keeping the cost down:**
+
+- **Template answers.** When the result is simple (nothing found, one row, a summary, the top group of a ranking, a plain list), code writes the sentence from the table and step 2 is skipped. The number checker still runs on it. Comparisons and tables of groups still go to the model. Set `TQ_EXPLAIN=ai` in `.env` to always use the model.
+- **A shorter prompt.** Step 1 sends one-line metric definitions and compact examples. (Sending only the 5 closest examples was tried: it saved about a fifth of step 1 but dropped accuracy, so all 16 are sent.)
+- **A daily budget.** `TQ_DAILY_REQUESTS` (default 300) and `TQ_DAILY_TOKENS` (default 1,000,000) per UTC day; 0 means no limit. Over the budget, typed questions are refused until midnight UTC, while suggested questions, the calendar and switch buttons keep working. Usage is counted in `data/usage.json` and shown in the sidebar.
+
+Answers are not cached: a new sync would change them, and each question is cheap enough after the steps above.
 
 ## Eval results
 
@@ -146,15 +160,15 @@ make eval                     # about 160 model requests; paced for the free tie
 make eval ARGS="--limit 10"   # a quick check
 ```
 
-| Gemini 3.5 Flash-Lite (free tier) | Run 1 | Run 2 |
-|---|---|---|
-| Valid spec | 98.8% | 100% |
-| Result match, clear questions (target 90%) | 91.4% | 100% |
-| Refusals, adversarial (target 100%) | 100% | 100% |
-| Number check passed | 100% | 100% |
-| Requests per question | 1.9 | 1.9 |
-| Seconds per question | 3.9 | 3.9 |
-| Cost | $0 | $0 |
+| Gemini 3.5 Flash-Lite (free tier) | Run 1 | Run 2 | Run 3 (cost cuts) |
+|---|---|---|---|
+| Valid spec | 98.8% | 100% | 100% |
+| Result match, clear questions (target 90%) | 91.4% | 100% | 100% |
+| Refusals, adversarial (target 100%) | 100% | 100% | 100% |
+| Number check passed | 100% | 100% | 100% |
+| Requests per question | 1.9 | 1.9 | 1.2 |
+| Seconds per question | 3.9 | 3.9 | 10.9 |
+| Cost | $0 | $0 | $0 |
 
 Run 1 failures, and what changed before run 2:
 - A session value written in its own words ("London/New York"): the account context now lists the real `session` and `close_reason` values.
@@ -162,6 +176,8 @@ Run 1 failures, and what changed before run 2:
 - Lots open at a moment asked with a time range, and "average lots open" as a plain average: the prompt now points to `as_of` and to the named metric `avg_lots_open`.
 - A Google 503 ("high demand"): the provider now retries once on server errors.
 - A correct answer (a buys-versus-sells comparison with its own labels) failed on label text: that question now ignores label text, like the other comparisons. This changed the grading, not the model.
+
+Run 3 adds template answers (most simple answers need one model call instead of two), the daily budget, and a total on the Rows line for grouped tables, so the model no longer adds group counts up itself (which the number checker had rightly rejected). Its seconds per question are higher because Google returned many 503 "high demand" errors that day and the run waited on retries. A try with only the 5 closest examples in the prompt dropped result match to 94.3%, so it was dropped.
 
 **Caveat:** the run 2 changes were made after seeing run 1's failures on these same questions, so run 2 partly measures tuning to this set. Run 1 is the fairer estimate for new questions; a held-out question set is the next step. The plan's two-model comparison is not done yet: the free tier allows only about 20 requests a day on larger Gemini models. Reports: `evals/results/`.
 
@@ -235,6 +251,8 @@ src/tradequery/
   examples.py     the plan's example questions as specs (tests, and worked examples for the LLM)
   llm.py          provider wrapper (Gemini; a scripted fake for tests)
   ask.py          question -> spec -> result -> checked answer, with follow-ups
+  templates.py    answer sentences written by code for simple results (no second model call)
+  usage.py        daily model usage and budget (data/usage.json)
   verify.py       number checker for the written answer
   api.py          the web API (FastAPI): accounts, ask with follow-up sessions, presets, specs
   web/index.html  the page: one file, no external libraries

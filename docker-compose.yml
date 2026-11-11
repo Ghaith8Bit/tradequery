@@ -24,6 +24,11 @@ services:
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-}
+      # Daily AI budget (0 = no limit) and answer style: auto = templates for simple answers, ai = always the model
+      TQ_DAILY_REQUESTS: ${TQ_DAILY_REQUESTS:-300}
+      TQ_DAILY_TOKENS: ${TQ_DAILY_TOKENS:-1000000}
+      TQ_EXPLAIN: ${TQ_EXPLAIN:-auto}
+      TQ_ALLOWED_HOSTS: ${TQ_ALLOWED_HOSTS:-}
     volumes:
       - ./data:/data
     restart: unless-stopped
