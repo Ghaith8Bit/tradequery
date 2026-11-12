@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from . import db
 from .detectors import RULES
 from .examples import EXAMPLES
-from .followup import drop_focus, focus_items, focus_line, found_item
+from .followup import drop_focus, focus_items, focus_line, found_item, spec_basis
 from .execute import QueryTimeout, Result, execute
 from .llm import LLMError, Provider, Usage
 from .scope import level_meaning
@@ -193,6 +193,9 @@ class Session:
         """The answered question becomes what follow-ups build on."""
         self.question, self.spec = question, spec.model_dump(mode="json", exclude_defaults=True)
         self.found, self.item = _found_ids(result), found_item(self.spec, result)
+        basis = spec_basis(self.spec)
+        if self.found and basis and "basis" not in result.columns:  # the ids alone don't say which kind
+            self.found += f" (all {basis} drawdowns)"
 
     def focus(self) -> list[dict]:
         """What the chat is narrowed to, as chips: [{"key", "label"}]."""

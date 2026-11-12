@@ -73,9 +73,22 @@ def found_item(spec: dict, result: Result | None) -> str | None:
     if value is None:
         return None
     if entity == "drawdown_episodes":
-        basis = result.rows[0][result.columns.index("basis")] if "basis" in result.columns else None
+        basis = result.rows[0][result.columns.index("basis")] if "basis" in result.columns else spec_basis(spec)
         return f"{'Equity' if basis == 'equity' else 'Balance'} drawdown {value}"
     return f"{noun} {value}"
+
+
+def spec_basis(spec: dict) -> str | None:
+    """The drawdown basis a spec asked for ("equity" or "balance"), when it filters on one."""
+    for f in spec.get("filters") or []:
+        if f.get("field") == "basis" and f.get("op") == "eq":
+            return f.get("value")
+    return None
+
+
+# how a follow-up finds the trades of the item in focus
+ITEM_FIELDS = (("Equity drawdown ", "equity_drawdown_episode_id"), ("Balance drawdown ", "drawdown_episode_id"),
+               ("Basket ", "sequence_id"), ("Streak ", "streak_id"))
 
 
 def focus_items(spec: dict | None, item: str | None = None) -> list[dict]:
@@ -127,4 +140,12 @@ def drop_focus(spec: dict | None, key: str) -> dict | None:
 def focus_line(spec: dict | None, item: str | None) -> str | None:
     """The focus as the model sees it in the next spec prompt."""
     chips = focus_items(spec, item)
-    return "; ".join(c["label"] for c in chips) if chips else None
+    if not chips:
+        return None
+    parts = []
+    for c in chips:
+        label = c["label"]
+        field = next((f for prefix, f in ITEM_FIELDS if label.startswith(prefix)), None)
+        number = label.rsplit(" ", 1)[-1]
+        parts.append(f"{label} (its trades: {field} = {number})" if c["key"] == "item" and field else label)
+    return "; ".join(parts)
