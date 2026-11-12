@@ -174,6 +174,8 @@ using only the result table you are given.
 - Say "basket", never "sequence". Never write a bare "drawdown": say "account drawdown (equity)", "account
   drawdown (balance)" or "basket drawdown", as the Level line and the columns show.
 - News: say a result "overlapped" news, never that news caused it.
+- If the question assumes a loss and the table shows a profit (or the reverse), say so plainly: "None of your
+  sessions lost money overall; the weakest was ..." rather than "you lost the most in ...".
 - No advice, no predictions, no lists or headings. Plain text only."""
 
 
@@ -222,6 +224,7 @@ class Answer:
     smart: bool = False
     checks: list = field(default_factory=list)  # smart mode: (purpose, spec, result) of each extra check
     ideas: list[str] = field(default_factory=list)  # smart mode: questions worth asking next
+    plan_problems: list[str] = field(default_factory=list)  # smart mode: why planned checks were rejected
 
 
 def account_context(path, settings: Settings) -> str:
@@ -320,14 +323,36 @@ def _table_text(result: Result, rows: int = EXPLAIN_ROWS) -> str:
     return "\n".join(lines)
 
 
-_WORDS = [(re.compile(r"\bsequences\b"), "baskets"), (re.compile(r"\bSequences\b"), "Baskets"),
+_SESSION_NAMES = {"asia": "Asia", "london": "London", "new_york": "New York", "off_hours": "off hours"}
+_SESSION = re.compile(r"\b(?:asia|london|new_york|off_hours)(?:_(?:asia|london|new_york))*\b|\bnew york\b")
+
+
+def _session_words(m: re.Match) -> str:
+    text = m.group(0)
+    if text == "new york":
+        return "New York"
+    names, rest = [], text
+    while rest:  # "london_new_york" -> London, New York
+        name = next(n for n in sorted(_SESSION_NAMES, key=len, reverse=True) if rest.startswith(n))
+        names.append(_SESSION_NAMES[name])
+        rest = rest[len(name):].lstrip("_")
+    return names[0] if len(names) == 1 else "/".join(names) + " overlap"
+
+
+_WORDS = [(re.compile(r"\bposition(?:_id| ID| id)\s*(\d)"), r"trade \1"),
+          (re.compile(r"\bsequence_id\s*(\d)"), r"basket \1"), (re.compile(r"\bstreak_id\s*(\d)"), r"streak \1"),
+          (re.compile(r"\bepisode_id\s*(\d)"), r"drawdown \1"),
+          (re.compile(r"\bsequences\b"), "baskets"), (re.compile(r"\bSequences\b"), "Baskets"),
           (re.compile(r"\bsequence\b"), "basket"), (re.compile(r"\bSequence\b"), "Basket"),
           (re.compile(r"\b1 (basket|trade|drawdown)s\b"), r"1 \1"),
-          (re.compile(r"\b(\d{4}-\d\d-\d\d[ T]\d\d:\d\d):\d\d\b"), r"\1")]
+          (re.compile(r"(?<!\d)(\d\d:\d\d):\d\d\b"), r"\1"),  # times without seconds
+          (re.compile(r"\b(lost|losing|lose|loss of|losses of) -(?=\d)"), r"\1 "),  # "lost -21.4" -> "lost 21.4"
+          (_SESSION, _session_words)]
 
 
 def plain_words(text: str) -> str:
-    """The trader's words in an answer: baskets, never sequences; "1 basket", not "1 baskets". Numbers are untouched."""
+    """The trader's words in an answer: baskets, never sequences; "1 basket", not "1 baskets"; "trade 1095", not
+    "position_id 1095"; "London/New York overlap", not "london_new_york". Numbers are untouched."""
     for pattern, repl in _WORDS:
         text = pattern.sub(repl, text)
     return text
@@ -517,7 +542,8 @@ the main result table and up to three extra check tables. Write plain text in ex
    result was made of, when and where it happened, and what stood out (a symbol, an hour, one big trade, a
    stop-out, a deposit). Only when two tables show the same thing measured differently, say why both are right
    (for example an equity drawdown measured while trades were still open against a balance drawdown measured
-   when they closed, or a deposit made inside a drawdown). Do not repeat the first sentences.
+   when they closed, or a deposit made inside a drawdown). Most answers need no such sentence. Do not repeat
+   the first sentences.
 3. The line "Worth asking next:" then 2 or 3 lines, each starting with "- " and holding one short question the
    trader could type next about their own data.
 Rules:
@@ -528,6 +554,9 @@ Rules:
 - Say "basket", never "sequence". A streak is a run of trades in a row, not a basket. Never write a bare
   "drawdown": say "account drawdown (equity)", "account drawdown (balance)" or "basket drawdown".
 - Never count rows yourself ("4 of the trades"): name a count only when a column or a Rows line shows it.
+- Plain words, not column names: "trade 1095", "basket 1", "the London/New York overlap", never position_id,
+  sequence_id or london_new_york. A streak is never a basket, even when its trades belong to one.
+- If the question assumes a loss and the table shows a profit (or the reverse), say so plainly first.
 - News: say a result "overlapped" news, never that news caused it.
 - Describe what the data shows. No trading advice ("you should ..."), no predictions, no markdown, no other
   headings."""
@@ -567,6 +596,7 @@ def _plan(question: str, context: str, answer: Answer, provider: Provider) -> li
             return []
         answer.usage.add(usage)
         checks, problems = _valid_checks(reply, main)
+        answer.plan_problems = problems
         if checks or not problems:
             return checks
     return []

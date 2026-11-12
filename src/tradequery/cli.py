@@ -741,6 +741,10 @@ def cmd_eval(args) -> int:
     if args.model:
         os.environ["GEMINI_MODEL"] = args.model
     settings = load_settings()
+    if args.smart and args.questions == "evals/questions.jsonl":
+        args.questions = "evals/smart.jsonl"
+    if args.smart and args.out == "evals/results":
+        args.out = "evals/results/smart"
     questions = evaluate.load_questions(args.questions)
     if args.ids:
         wanted = set(args.ids.split(","))
@@ -754,6 +758,8 @@ def cmd_eval(args) -> int:
         return 2
     root = Path(tempfile.mkdtemp(prefix="tq-eval-"))
     path = evaluate.build_eval_account(root, settings)
+    if args.smart:
+        return _eval_smart(questions, path, settings, provider, args)
     per_q = 2 if args.explain else 1
     print(f"Eval: {len(questions)} questions on the synthetic eval account with {provider.name} {provider.model}; "
           f"about {len(questions) * per_q} requests, paced at {args.rpm:g} per minute.")
@@ -767,6 +773,24 @@ def cmd_eval(args) -> int:
                                 progress=progress)
     json_path, md_path = evaluate.save(report, args.out)
     print("\n" + evaluate.markdown(report))
+    print(f"Saved {json_path} and {md_path}")
+    return 0
+
+
+def _eval_smart(questions, path, settings, provider, args) -> int:
+    from . import smart_eval
+
+    print(f"Smart eval: {len(questions)} questions, each in normal and smart mode, with {provider.name} "
+          f"{provider.model}; about {len(questions) * 5} requests, paced at {args.rpm:g} per minute.")
+
+    def progress(i, total, o):
+        mark = "good" if o.good else "; ".join(o.problems) or "wrong result"
+        print(f"  [{i:>2}/{total}] {o.id:<10} normal {'PASS' if o.normal.passed else 'fail'} · smart "
+              f"{'PASS' if o.smart.passed else 'fail'} · {len(o.checks)} checks · {mark}", flush=True)
+
+    report = smart_eval.run_compare(questions, path, settings, provider, rpm=args.rpm, progress=progress)
+    json_path, md_path = smart_eval.save(report, args.out)
+    print("\n" + smart_eval.markdown(report).split("Per question:")[0])
     print(f"Saved {json_path} and {md_path}")
     return 0
 
@@ -952,6 +976,8 @@ def main(argv=None) -> int:
     ev.add_argument("--limit", type=int, help="only the first N questions")
     ev.add_argument("--model", help="a model name to use instead of GEMINI_MODEL")
     ev.add_argument("--rpm", type=float, default=9, help="model requests per minute (free tiers are strict)")
+    ev.add_argument("--smart", action="store_true",
+                    help="ask each question in normal and smart mode and compare (default questions: evals/smart.jsonl)")
     ev.add_argument("--no-explain", dest="explain", action="store_false",
                     help="skip the written answer (one request per question; no number-check score)")
     ev.set_defaults(func=cmd_eval)
