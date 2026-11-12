@@ -169,6 +169,7 @@ make eval                     # about 160 model requests; paced for the free tie
 make eval ARGS="--limit 10"   # a quick check
 make eval-heldout             # 43 held-out questions, never used to tune the prompt
 make eval-followups           # follow-up questions, each asked after an earlier turn
+make eval-smart               # normal vs smart answers on the same 16 questions
 ```
 
 A follow-up question (`evals/followups.jsonl`) has an `"after"` turn: an earlier question and its gold spec, answered without a model call, so the follow-up is asked with that conversation's focus.
@@ -199,6 +200,18 @@ Run 4 was the first after answers began to lead with what was asked, explain dep
 - Between runs, "trades that were part of a martingale" was once filtered as "in any basket": the prompt now points to the `martingale` tag.
 
 Run 5's one miss averaged the rows of the exposure table for "on average, how many lots do I have open" (run 1 made the same slip). The prompt now says why that is wrong and points to `avg_lots_open`; run 6, after conversation focus was added, passed all 81 (100% result match, refusals and number check, 1.1 requests per question). The 6 follow-up questions (`make eval-followups`) passed 6/6 on their first run.
+
+**Normal vs smart.** `make eval-smart` asks 16 questions (`evals/smart.jsonl`, gold answers reused from the sets above) in both modes. Besides the right result and the number check, each smart answer is judged by plain rules, not by another model: an extra check ran; the "Why" names something specific (a number, a date, a symbol); there are 2 or 3 next questions; there is no advice, no "news caused it", no column names, no "lost -20", and a streak is never called a basket. Latest run (Gemini 3.5 Flash-Lite, 2026-11-12):
+
+| Measure | Normal | Smart |
+|---|---|---|
+| Result match | 100% | 100% |
+| Number check passed | 100% | 100% |
+| Requests per question | 1.2 | 3.1 |
+| Tokens per question | 5,216 | 12,455 |
+| Seconds per question | 2.8 | 5.6 |
+
+All 16 smart answers passed every rule (2.4 extra checks per question). The first run also passed the rules, but reading its answers found a streak called a basket, column names such as `position_id`, "lost -105.8", and "you lost the most in New York" for a session that made money. The page now rewrites column names, session names, seconds and double negatives in code, the prompt covers the rest, and the judge checks for all of them. Known limit: the rules cannot tell whether a "Why" links its facts correctly. In one answer every number was real, but it named an open trade that did not fit the peak it explained. Read the answers in `evals/results/smart/` to judge that.
 
 **Held-out set.** `evals/heldout.jsonl` was written after all prompt tuning: 44 new questions (38 clear, 6 adversarial) in new wording, including baskets and streaks, each gold answer checked to return real data on the eval account. First and only scored run (Gemini 3.5 Flash-Lite, 2026-11-11):
 

@@ -7,7 +7,7 @@ DC = docker compose
 # without it, code changes would be silently ignored by an old image.
 RUN = $(DC) run --rm --build
 
-.PHONY: test demo sample import show mt5-setup inspect sync calendar news ask eval eval-heldout eval-followups backup web web-stop shell-mt5 clean-mt5
+.PHONY: test demo sample import show mt5-setup inspect sync calendar news ask eval eval-heldout eval-followups eval-smart backup web web-stop shell-mt5 clean-mt5
 
 test:        ## unit tests, inside Docker
 	$(RUN) --entrypoint pytest app -q
@@ -51,6 +51,9 @@ MT5_READY = $(shell docker volume ls -q 2>/dev/null | grep -q 'mt5-wine$$' && ec
 
 eval-followups: ## follow-up questions asked after an earlier turn (about 10 requests)
 	$(RUN) -v $(CURDIR)/evals:/app/evals app eval --questions evals/followups.jsonl --out evals/results/followups $(ARGS)
+
+eval-smart:  ## normal vs smart answers on the same questions (about 80 requests)
+	$(RUN) -v $(CURDIR)/evals:/app/evals app eval --smart $(ARGS)
 
 eval-heldout: ## the held-out questions, never used to tune the prompt (about 50 requests)
 	$(RUN) -v $(CURDIR)/evals:/app/evals app eval --questions evals/heldout.jsonl --out evals/results/heldout $(ARGS)

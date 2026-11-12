@@ -1,0 +1,612 @@
+{
+  "model": "gemini gemini-3.5-flash-lite",
+  "started": "2026-11-12T01:14:01+00:00",
+  "summary": {
+    "questions": 16,
+    "normal": {
+      "result_match_rate": 1.0,
+      "number_check_rate": 1.0,
+      "requests_per_question": 1.1875,
+      "tokens_per_question": 5479.25,
+      "seconds_per_question": 2.734375
+    },
+    "smart": {
+      "result_match_rate": 1.0,
+      "number_check_rate": 1.0,
+      "requests_per_question": 3.1875,
+      "tokens_per_question": 12540.375,
+      "seconds_per_question": 5.3575
+    },
+    "checks_rate": 1.0,
+    "checks_per_question": 2.5,
+    "rejected_per_question": 0.1875,
+    "why_rate": 1.0,
+    "ideas_rate": 1.0,
+    "style_rate": 1.0,
+    "good_rate": 1.0
+  },
+  "stopped_early": null,
+  "outcomes": [
+    {
+      "id": "sm-01",
+      "question": "Did news cause my worst drawdown?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4858,
+        "seconds": 1.53,
+        "error": null,
+        "text": "Mostly not: only 5.21% of the losses in this drawdown came from trades that overlapped news. Your account drawdown (balance) went 521.20 deep (5.11% of the money at stake), from its peak on 2026-09-08 13:00 to its low on 2026-09-09 12:50, recovered on 2026-09-09 18:40; 8 trades closed in it (times in UTC)."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 12193,
+        "seconds": 5.27,
+        "error": null,
+        "text": "News did not cause your worst account drawdown (balance), as news overlapped with only 5.21% of the lost profit in that episode.\n\nWhy: The episode happened between 2026-09-08 13:00 and 2026-09-09 12:50, spanning 8 trades that lost 521.2 in total depth. Within that time, a high importance USD Nonfarm Payrolls news event occurred on 2026-09-09 09:25, which overlapped with a loss of 30.7 on position 1015 in XAUUSD. Most of the 5.11% account drawdown (balance) accumulated during the heavy selling in XAUUSD positions like position 1021, which lost 245.6 without a news overlap."
+      },
+      "checks": [
+        "View the trades inside that drawdown episode",
+        "Check for news events during that drawdown",
+        "Check overall news overlap share for all trades"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "Which symbols contributed the most profit outside of news overlaps?",
+        "What was the win rate for XAUUSD trades specifically during this drawdown episode?",
+        "How many total trades in the account were affected by high importance news events?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-02",
+      "question": "What was my worst drawdown, and what was it made of?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4864,
+        "seconds": 2.57,
+        "error": null,
+        "text": "Your account drawdown (balance) went 521.20 deep (5.11% of the money at stake), from its peak on 2026-09-08 13:00 to its low on 2026-09-09 12:50, recovered on 2026-09-09 18:40; 8 trades closed in it (times in UTC)."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 12325,
+        "seconds": 4.84,
+        "error": null,
+        "text": "Your worst account drawdown (balance) reached a depth of 521.2, which is 5.11% of your balance, lasting 1.236 days between 2026-09-08 13:00 and 2026-09-09 18:40.\n\nWhy: This drop was made of 8 closed trades involving XAUUSD, GBPUSD, and EURUSD, culminating in a trough on 2026-09-09 12:50. The episode included a high-importance Nonfarm Payrolls news event for USD on 2026-09-09 09:25, with news accounting for 5.21% of the losses. Standout positions included a large XAUUSD buy trade that lost 245.6."
+      },
+      "checks": [
+        "Trades inside the worst drawdown episode",
+        "News events overlapping the drawdown period"
+      ],
+      "checks_rejected": 1,
+      "ideas": [
+        "Which symbol contributed the most net losses during this episode?",
+        "What was the peak balance value before this drawdown began?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-03",
+      "question": "How long did my worst drawdown last?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4853,
+        "seconds": 2.1,
+        "error": null,
+        "text": "It lasted 1.24 days. Your account drawdown (balance) went 521.20 deep (5.11% of the money at stake), from its peak on 2026-09-08 13:00 to its low on 2026-09-09 12:50, recovered on 2026-09-09 18:40 (times in UTC)."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11894,
+        "seconds": 4.5,
+        "error": null,
+        "text": "Your worst account drawdown (balance) lasted 1.236 days, starting on 2026-09-08 13:00 and recovering by 2026-09-09 18:40 with a depth of 521.2.\n\nWhy: The episode was made of 8 closed trades that reached a trough on 2026-09-09 12:50. XAUUSD stood out with multiple losing positions, including the largest loss of 245.6 on a 0.8 lot buy trade. One high-importance USD news event for Nonfarm Payrolls overlapped the drawdown period on 2026-09-09 09:25."
+      },
+      "checks": [
+        "Trades during the worst drawdown",
+        "News events during the drawdown period"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "What was the peak balance before this drawdown episode started?",
+        "Which symbol contributed the most losses during this period?",
+        "How many other drawdown episodes occurred in my account history?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-04",
+      "question": "What was my longest losing streak, and what went wrong in it?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4817,
+        "seconds": 2.69,
+        "error": null,
+        "text": "A losing streak of 6 trades in a row, from 2026-09-14 11:21 to 2026-09-14 16:51 UTC, net -128.40."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11793,
+        "seconds": 5.91,
+        "error": null,
+        "text": "Your longest losing streak reached a length of 6 trades and lost 128.4 on 2026-09-14 between 11:21 and 16:51.\n\nWhy: The basket was made of 6 consecutive sell positions on EURUSD, each sized at 0.2 lots with identical losses of 21.4. Half of the trades overlapped news while the other half did not, evenly splitting the total net loss between them."
+      },
+      "checks": [
+        "Inspect the trades inside that losing streak",
+        "Check symbols traded during the streak",
+        "Check news overlap during the streak"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "Did any winning trades happen right before or after this losing streak?",
+        "What was my largest winning streak compared to this losing one?",
+        "How did my account equity behave during this 6-trade losing streak?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-05",
+      "question": "Which hour of the day loses me the most money on gold?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4851,
+        "seconds": 2.63,
+        "error": null,
+        "text": "Hour 15 has the lowest net: -271.42; trades 3."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11582,
+        "seconds": 5.83,
+        "error": null,
+        "text": "Hour 15 loses you the most money on gold, with a net loss of 271.42 across 3 trades.\n\nWhy: The result was made of three gold positions in hour 15, which happened between 2026-09-09 and 2026-09-15. What stood out was position 1021 on the buy side, which made up the bulk of the loss with 245.6 lost in 20.0 minutes. None of these trades overlapped with news."
+      },
+      "checks": [
+        "Worst gold hour trades",
+        "Gold performance by session",
+        "Gold news overlap check"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "Which session do these hour 15 trades fall into?",
+        "How did my other gold hours perform?",
+        "Was magic 12345 active on all hour 15 trades?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-06",
+      "question": "Which symbol made me the least money, and why?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 2,
+        "tokens": 9714,
+        "seconds": 3.97,
+        "error": null,
+        "text": "Canonical symbol EURUSD has the lowest total net profit: -253.38; trades 17."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 4,
+        "tokens": 17133,
+        "seconds": 6.96,
+        "error": null,
+        "text": "EURUSD made you the least money with a net profit of -253.38 across 17 trades and a win rate of 29.41%.\n\nWhy: The result was made of losses spread across sessions, with london losing -105.8, london_new_york losing -95.48, and new_york losing -52.1. It happened between 2026-09-15 and 2026-09-18, featuring a position with position_id 1095 that stood out by losing -73.96 on a buy of 0.3 lots held for 180.0 minutes, while 3 of the trades overlapped news for a net profit of -64.2."
+      },
+      "checks": [
+        "Check EURUSD trades by session",
+        "Check EURUSD biggest losing trades",
+        "Check EURUSD trades overlapping news"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "Which symbol had the highest win rate alongside EURUSD?",
+        "How did my EURUSD trades perform across different days of the week?",
+        "What was the average hold time for my winning EURUSD trades compared to my losing ones?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-07",
+      "question": "In which trading session did I lose the most?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4829,
+        "seconds": 2.54,
+        "error": null,
+        "text": "Session new_york has the lowest net: 10.70; trades 4."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11179,
+        "seconds": 5.01,
+        "error": null,
+        "text": "You lost the most in the new york session, where you had a net of 10.70.\n\nWhy: The session result was made of 4 trades in EURUSD and GBPUSD. It happened between 2026-09-08 and 2026-09-16, with individual losses reaching down to -30.70 on position 1069."
+      },
+      "checks": [
+        "See the worst trades in that session"
+      ],
+      "checks_rejected": 1,
+      "ideas": [
+        "Which individual session had the largest total loss amount in my history?",
+        "What was my win rate in the new york session compared to other sessions?",
+        "How many total trades did I place during the new york session across all symbols?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-08",
+      "question": "Which weekday is my most profitable?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 2,
+        "tokens": 9702,
+        "seconds": 4.29,
+        "error": null,
+        "text": "Weekday Wed has the highest total net profit: 355.74; trades 15."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11073,
+        "seconds": 4.55,
+        "error": null,
+        "text": "Your most profitable weekday is Wednesday, generating a net profit of 355.74 across 15 trades.\n\nWhy: The extra checks show that Wednesday also led in performance with a win rate of 73.33% and the highest trading volume of 4.10 lots, shared with Tuesday which had 4.10 lots across 13 trades. Monday, Thursday, and Friday recorded lower trade counts and smaller volume totals of 2.1, 1.9, and 0.6 lots respectively. Both the net profit table and the win rate and volume tables use the same 15 Wednesday trades, measured first by financial outcome and then by win percentage and lot size."
+      },
+      "checks": [
+        "Win rate by weekday",
+        "Trading volume by weekday"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "Which hour on Wednesday produced the most profit?",
+        "What caused the losses on Monday and Friday?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-09",
+      "question": "What was my single best trade?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4796,
+        "seconds": 2.46,
+        "error": null,
+        "text": "One trade found: canonical symbol XAUUSD, side buy, lots 1.60, magic 12345, open time utc 2026-09-09 13:20."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 4,
+        "tokens": 16962,
+        "seconds": 5.73,
+        "error": null,
+        "text": "Your single best trade was position 1023 on XAUUSD, which was a buy order of 1.6 lots that made a net profit of 488.8 on 2026-09-09 between 13:20 and 13:40.\n\nWhy: The extra checks show this winning trade stood out against the overall metrics where the net profit for 48 trades was 346.01 with a gross profit of 1590.98. Among the top trades on XAUUSD, it was executed with the largest lot size of 1.6 and generated the highest net profit by a wide margin compared to the other four listed XAUUSD positions."
+      },
+      "checks": [
+        "Compare best trade profit with overall metrics",
+        "View other top trades on XAUUSD"
+      ],
+      "checks_rejected": 1,
+      "ideas": [
+        "What were my losing trades on XAUUSD?",
+        "How did my trades with magic number 12345 perform overall?",
+        "What was the performance of my trades during the hour of 13:00 on 2026-09-09?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-10",
+      "question": "Show my three worst trades, worst first.",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4798,
+        "seconds": 2.57,
+        "error": null,
+        "text": "3 trades found, lowest net result first."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11761,
+        "seconds": 5.11,
+        "error": null,
+        "text": "Your three worst trades are position 1021 on XAUUSD which lost 245.6, position 1019 on XAUUSD which lost 122.8, and position 1095 on EURUSD which lost 73.96.\n\nWhy: The result was made of three single trades placed on 2026-09-09 and 2026-09-18 using magic number 12345, with none of them overlapping news. What stood out was that the two XAUUSD losses happened close together on the same day within a 20-minute hold time each, while the EURUSD loss was held for 180.0 minutes. Both XAUUSD trades and the EURUSD trade were part of 19 total trades under magic number 12345 that together yielded a net profit of 166.99 with a win rate of 42.11%."
+      },
+      "checks": [
+        "Check symbols of worst trades",
+        "Check news overlap on worst trades",
+        "Check if magic number 12345 EA caused them"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "What were the best trades for magic number 12345?",
+        "How did the other EURUSD trades perform compared to position 1095?",
+        "What was the performance on XAUUSD outside of these two losing positions?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-11",
+      "question": "What was my deepest martingale basket and how did it end?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4859,
+        "seconds": 3.11,
+        "error": null,
+        "text": "Basket 1 (XAUUSD, buy, martingale, 5 legs) closed in profit, net 28.30; total lots 3.10."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 4,
+        "tokens": 13287,
+        "seconds": 6.24,
+        "error": null,
+        "text": "Your deepest martingale basket reached a depth of 5 on XAUUSD and ended in a win with a net profit of 28.3.\n\nWhy: The basket was made of 5 single trades on XAUUSD under magic number 12345, starting at 2026-09-09 09:15 and ending at 2026-09-09 13:40, where the largest trade size reached 1.6 lots. The basket lifetime overlapped with a high importance Nonfarm Payrolls news event for USD at 2026-09-09 09:25."
+      },
+      "checks": [
+        "Inspect trades in the deepest martingale basket",
+        "Check news overlap for the deepest martingale basket"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "What was the net profit of each trade inside sequence_id 1?",
+        "How many total martingale baskets traded on XAUUSD?",
+        "What was the lot multiplier used across my other martingale baskets?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-12",
+      "question": "Which basket lost me the most money?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4798,
+        "seconds": 2.18,
+        "error": null,
+        "text": "Basket 1 (XAUUSD, buy, martingale, 5 legs) closed in profit, net 28.30; lot multiplier 16.00."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11807,
+        "seconds": 5.21,
+        "error": null,
+        "text": "The only basket listed in your account data is sequence_id 1 on XAUUSD, which actually made a net profit of 28.3 rather than losing money. \n\nWhy: This martingale buy basket ran between 2026-09-09 09:15 and 2026-09-09 13:40, reaching a depth of 5 legs with a maximum lot size of 1.6 and overlapping news. The five individual trades inside it show four losing positions down to a net profit of -245.6 before the final winning trade recovered the whole basket."
+      },
+      "checks": [
+        "Inspect legs and trades inside this basket",
+        "Compare all baskets by net P&L and depth",
+        "Check if news overlapped this basket"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "Which individual trades lost the most money across my account?",
+        "Are there other baskets in my history that recorded negative net P&L?",
+        "What was the highest basket drawdown reached on my account?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-13",
+      "question": "Compare my win rate on gold versus EURUSD.",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 2,
+        "tokens": 5411,
+        "seconds": 3.6,
+        "error": null,
+        "text": "Across your trades, Gold had 16 trades with a win rate of 43.75% and net profit of 181.78, while EURUSD had 17 trades with a win rate of 29.41% and lost 253.38."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11335,
+        "seconds": 4.92,
+        "error": null,
+        "text": "Your win rate on gold is higher at 43.75% compared to EURUSD at 29.41%.\n\nWhy: The result was made of 16 trades on Gold and 17 trades on EURUSD, happening at average lot sizes of 0.45 for XAUUSD and 0.17 for EURUSD. What stood out was the difference in risk, with Gold averaging 220.0 per trade while EURUSD averaged 50.625."
+      },
+      "checks": [
+        "Check lot sizes and risk on both symbols",
+        "Check hold times and trade outcomes"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "What was my largest winning trade on Gold?",
+        "How did my EURUSD trades perform at different times of day?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-14",
+      "question": "What is my maximum drawdown?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4857,
+        "seconds": 2.38,
+        "error": null,
+        "text": "Your account drawdown (balance) went 521.20 deep (5.11% of the money at stake), from its peak on 2026-09-08 13:00 to its low on 2026-09-09 12:50, recovered on 2026-09-09 18:40; 8 trades closed in it (times in UTC)."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 12639,
+        "seconds": 5.32,
+        "error": null,
+        "text": "Your maximum account drawdown (balance) reached a depth of 521.2, which is 5.11%, spanning from 2026-09-08 13:00 to 2026-09-09 18:40 across 8 closed trades.\n\nWhy: The episode was built from 8 trades starting on 2026-09-08 14:30 and ending on 2026-09-09 12:50, with a news loss share of 5.21% that overlapped with Nonfarm Payrolls on 2026-09-09 09:25. The largest losing trade during this time was position ID 1021 on XAUUSD, losing 245.6."
+      },
+      "checks": [
+        "Trades during the maximum drawdown episode",
+        "Check for news overlap during the drawdown",
+        "Largest losing trades in the period"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "What were the specific details of position ID 1021 during the drawdown?",
+        "How did the Nonfarm Payrolls news event overlap with the trades?",
+        "Which symbols contributed the most to the losses in this episode?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-15",
+      "question": "How many lots did I have open at once at the peak, and when?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4830,
+        "seconds": 2.61,
+        "error": null,
+        "text": "One moment found: time utc 2026-09-09 13:20, symbol ALL, long lots 1.60, short lots 0.00, net lots 1.60."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 12158,
+        "seconds": 5.42,
+        "error": null,
+        "text": "At the peak, you had a gross and net total of 1.6 lots open at once, all on the long side. This happened on 2026-09-09 at 13:20:00 with 1 position open.\n\nWhy: The extra checks show this peak exposure came entirely from XAUUSD using magic number 12345, building up from earlier smaller sizes on the same day. That peak position 1023 was held for 20.0 minutes until 13:40:00 and ended as a win of 488.8."
+      },
+      "checks": [
+        "Peak lots open by symbol",
+        "Trades open around the peak time",
+        "Summary of lots open by symbol"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "What was my largest short exposure by symbol and when did it occur?",
+        "Which trade contributed the most profit during the XAUUSD scaling basket?",
+        "How did my account equity behave during the buildup to 1.6 lots on 2026-09-09?"
+      ],
+      "problems": [],
+      "good": true
+    },
+    {
+      "id": "sm-16",
+      "question": "What was my win rate from 14 to 20 September 2026?",
+      "normal": {
+        "passed": true,
+        "verified": true,
+        "text_source": "template",
+        "requests": 1,
+        "tokens": 4831,
+        "seconds": 2.52,
+        "error": null,
+        "text": "Across the matching trades: win rate 51.72%."
+      },
+      "smart": {
+        "passed": true,
+        "verified": true,
+        "text_source": "model",
+        "requests": 3,
+        "tokens": 11525,
+        "seconds": 4.9,
+        "error": null,
+        "text": "Your win rate from 14 to 20 September 2026 was 51.72% across 29 trades, resulting in a net profit of 90.92.\n\nWhy: The trades happened between 2026-09-14 and 2026-09-20 and were split across three symbols, three sessions, and two magic numbers. What stood out was EURUSD with 15 trades and a win rate of 20.00%, which lost 311.98, while GBPUSD had a 100.00% win rate across 9 trades."
+      },
+      "checks": [
+        "Win rate by symbol during that week",
+        "Win rate by trading session that week",
+        "Win rate by magic number that week"
+      ],
+      "checks_rejected": 0,
+      "ideas": [
+        "What was my largest winning trade on GBPUSD that week?",
+        "How did my EURUSD trades perform during the london_new_york session?",
+        "What was the profit breakdown for magic number 0?"
+      ],
+      "problems": [],
+      "good": true
+    }
+  ]
+}
