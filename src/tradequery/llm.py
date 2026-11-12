@@ -95,6 +95,10 @@ def choose_model(names: list[str]) -> str | None:
     return None
 
 
+# the model used when the list of models can't be fetched at start-up (set GEMINI_MODEL in .env to choose one)
+FALLBACK_MODEL = "gemini-3.5-flash-lite"
+
+
 def _is_network_error(error: Exception) -> bool:
     """A transport failure from the HTTP client (httpx or its vendored copy): timeout, DNS, refused connection."""
     names = [cls.__name__ for cls in type(error).__mro__]
@@ -129,7 +133,13 @@ class GeminiProvider(Provider):
             raise self._translate(error) from None
 
     def _auto_model(self) -> str:
-        chosen = choose_model(self.list_models())
+        try:
+            names = self.list_models()
+        except Exception as error:  # no network yet (right after a restart): use the usual model, don't crash
+            if isinstance(error, (OSError, TimeoutError)) or _is_network_error(error):
+                return FALLBACK_MODEL
+            raise
+        chosen = choose_model(names)
         if not chosen:
             raise LLMError("no Gemini text model is available to this key; set GEMINI_MODEL in .env")
         return chosen
