@@ -1,0 +1,219 @@
+{
+  "model": "gemini gemini-3.5-flash-lite",
+  "started": "2026-11-12T00:20:29+00:00",
+  "summary": {
+    "questions": 6,
+    "valid_spec_rate": 1.0,
+    "result_match_rate": 1.0,
+    "refusal_rate": null,
+    "number_check_rate": 1.0,
+    "requests_per_question": 1.0,
+    "tokens_per_question": 4981.666666666667,
+    "seconds_per_question": 1.415
+  },
+  "by_category": {
+    "follow-ups": [
+      6,
+      6
+    ]
+  },
+  "stopped_early": null,
+  "outcomes": [
+    {
+      "id": "fu-01",
+      "category": "follow-ups",
+      "question": "Which of them overlapped news?",
+      "expect": "result",
+      "valid_spec": true,
+      "passed": true,
+      "kind": "query",
+      "verified": true,
+      "requests": 1,
+      "input_tokens": 4934,
+      "output_tokens": 93,
+      "seconds": 2.14,
+      "spec": {
+        "entity": "trades",
+        "filters": [
+          {
+            "field": "news_overlap",
+            "op": "eq",
+            "value": true
+          }
+        ],
+        "time_range": {
+          "start": "2026-09-14",
+          "end": "2026-09-14"
+        },
+        "order_by": [
+          {
+            "field": "open_time_utc",
+            "direction": "asc"
+          }
+        ],
+        "limit": 100
+      },
+      "error": null
+    },
+    {
+      "id": "fu-02",
+      "category": "follow-ups",
+      "question": "What news was there that day?",
+      "expect": "result",
+      "valid_spec": true,
+      "passed": true,
+      "kind": "query",
+      "verified": true,
+      "requests": 1,
+      "input_tokens": 4935,
+      "output_tokens": 59,
+      "seconds": 1.27,
+      "spec": {
+        "entity": "news_events",
+        "time_range": {
+          "start": "2026-09-14",
+          "end": "2026-09-14"
+        },
+        "order_by": [
+          {
+            "field": "time_utc",
+            "direction": "asc"
+          }
+        ],
+        "limit": 100
+      },
+      "error": null
+    },
+    {
+      "id": "fu-03",
+      "category": "follow-ups",
+      "question": "And how many of those were buys?",
+      "expect": "result",
+      "valid_spec": true,
+      "passed": true,
+      "kind": "query",
+      "verified": true,
+      "requests": 1,
+      "input_tokens": 4896,
+      "output_tokens": 93,
+      "seconds": 1.08,
+      "spec": {
+        "entity": "trades",
+        "filters": [
+          {
+            "field": "canonical_symbol",
+            "op": "eq",
+            "value": "XAUUSD"
+          },
+          {
+            "field": "side",
+            "op": "eq",
+            "value": "buy"
+          }
+        ],
+        "time_range": {
+          "start": "2026-09-01",
+          "end": "2026-09-30"
+        },
+        "metrics": [
+          "trade_count"
+        ]
+      },
+      "error": null
+    },
+    {
+      "id": "fu-04",
+      "category": "follow-ups",
+      "question": "What is my win rate overall, across all my trades?",
+      "expect": "result",
+      "valid_spec": true,
+      "passed": true,
+      "kind": "query",
+      "verified": true,
+      "requests": 1,
+      "input_tokens": 4900,
+      "output_tokens": 14,
+      "seconds": 1.08,
+      "spec": {
+        "entity": "trades",
+        "metrics": [
+          "win_rate"
+        ]
+      },
+      "error": null
+    },
+    {
+      "id": "fu-05",
+      "category": "follow-ups",
+      "question": "Which of its trades overlapped news?",
+      "expect": "result",
+      "valid_spec": true,
+      "passed": true,
+      "kind": "query",
+      "verified": true,
+      "requests": 1,
+      "input_tokens": 4907,
+      "output_tokens": 73,
+      "seconds": 1.87,
+      "spec": {
+        "entity": "trades",
+        "filters": [
+          {
+            "field": "drawdown_episode_id",
+            "op": "eq",
+            "value": 1
+          },
+          {
+            "field": "news_overlap",
+            "op": "eq",
+            "value": true
+          }
+        ],
+        "order_by": [
+          {
+            "field": "open_time_utc",
+            "direction": "asc"
+          }
+        ]
+      },
+      "error": null
+    },
+    {
+      "id": "fu-06",
+      "category": "follow-ups",
+      "question": "Only the losing ones.",
+      "expect": "result",
+      "valid_spec": true,
+      "passed": true,
+      "kind": "query",
+      "verified": true,
+      "requests": 1,
+      "input_tokens": 4907,
+      "output_tokens": 79,
+      "seconds": 1.05,
+      "spec": {
+        "entity": "trades",
+        "filters": [
+          {
+            "field": "canonical_symbol",
+            "op": "eq",
+            "value": "EURUSD"
+          },
+          {
+            "field": "is_win",
+            "op": "eq",
+            "value": false
+          }
+        ],
+        "order_by": [
+          {
+            "field": "open_time_utc",
+            "direction": "asc"
+          }
+        ],
+        "limit": 100
+      },
+      "error": null
+    }
+  ]
+}

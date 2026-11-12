@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from . import db
 from .detectors import RULES
 from .examples import EXAMPLES
+from .followup import drop_focus, focus_items, focus_line, found_item
 from .execute import QueryTimeout, Result, execute
 from .llm import LLMError, Provider, Usage
 from .scope import level_meaning
@@ -143,6 +144,11 @@ When to answer with clarify or unsupported:
 Follow-ups: when a previous question and spec are given and the new question only refines them ("only gold",
 "just September", "and by weekday?"), return the previous spec with that change. A follow-up about what the
 previous answer found ("which trades were in it?") uses the ids listed under "Previous result".
+Current focus: when given, the conversation is narrowed to it (a period, a symbol, a magic number, a side, one
+basket, drawdown or streak). Keep it in a follow-up that has none of its own: "what about the news?" after a
+question about 2026-09-25 asks about the news on 2026-09-25 (same time_range), and "which were buys?" keeps the
+symbol. Drop it only when the new question names its own period, symbol or item, or asks about everything
+("overall", "all my trades", "ever", "in total").
 
 Reply with the JSON object only.
 """
@@ -179,6 +185,25 @@ class Session:
     spec: dict | None = None
     login: int | None = None  # the account the conversation is about (the web API never crosses accounts)
     found: str | None = None  # ids in the last result, so "which trades were in it?" can name the right one
+    item: str | None = None  # the one basket, drawdown or streak the last answer found ("Equity drawdown 72")
+
+    def remember(self, question: str, spec: QuerySpec, result: Result) -> None:
+        """The answered question becomes what follow-ups build on."""
+        self.question, self.spec = question, spec.model_dump(mode="json", exclude_defaults=True)
+        self.found, self.item = _found_ids(result), found_item(self.spec, result)
+
+    def focus(self) -> list[dict]:
+        """What the chat is narrowed to, as chips: [{"key", "label"}]."""
+        return focus_items(self.spec, self.item)
+
+    def drop(self, key: str) -> None:
+        """Forget one part of the focus ("period", "symbol", "item", an id field ...), or everything ("all")."""
+        if key == "all":
+            self.question = self.spec = self.found = self.item = None
+        elif key == "item":
+            self.found = self.item = None
+        else:
+            self.spec = drop_focus(self.spec, key)
 
 
 @dataclass
@@ -264,6 +289,9 @@ def _spec_prompt(question: str, context: str, session: Session | None) -> str:
         parts.append(f"Previous question: {session.question}\nPrevious spec: {json.dumps(session.spec)}")
         if session.found:
             parts.append(f"Previous result: {session.found}")
+    focus = focus_line(session.spec, session.item) if session else None
+    if focus:
+        parts.append(f"Current focus: {focus}")
     parts.append(f"Question: {question}")
     return "\n\n".join(parts)
 
@@ -402,8 +430,7 @@ def ask(question: str, path, settings: Settings, provider: Provider, session: Se
         answer.error = f"The query was stopped: {exc}. Try a narrower question."
         return answer
     if session is not None:
-        session.question, session.spec = question, answer.spec.model_dump(mode="json", exclude_defaults=True)
-        session.found = _found_ids(answer.result)
+        session.remember(question, answer.spec, answer.result)
 
     result = answer.result
     spec = answer.spec

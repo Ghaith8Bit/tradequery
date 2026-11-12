@@ -48,7 +48,7 @@ the page or run `make ask Q="What is my win rate?"`. Without a key the example q
 ## Eval results (summary)
 
 81 questions with hand-written gold answers, 10 of them adversarial, scored on the sample account, plus a held-out set of 43 written after tuning (97.4% result match on its first run, 100% on its latest). Gemini 3.5
-Flash-Lite, free tier: **result match 91.4% on the first run, 98.6% on the latest, adversarial refusals 100%,
+Flash-Lite, free tier: **result match 91.4% on the first run, 100% on the latest, adversarial refusals 100%,
 number check 100%, 1.1 model requests and $0 per question.** Details and caveats: [Eval results](#eval-results).
 
 ## Running on your own account
@@ -117,6 +117,7 @@ A chat page that also works on a phone:
 - **Start screen:** four key number cards (net result with this month against last, win rate per trade and per basket, account drawdown and basket drawdown with a bar), a daily result calendar (tap a day to see its trades), a "Risk to watch" box, a balance chart, net result by weekday, and suggested questions grouped by whole account, baskets and single trades. Suggested questions and calendar days run from hand-written specs with no model call.
 - **Live answers:** a typed question shows each step as it happens ("Reading your question", "Looking it up in your data", "Writing the answer"), then the model's words as they are written. The streamed text is marked as not yet checked; when it finishes, the number check runs and the finished answer replaces it. If the check fails, the page says so and shows the rewritten answer instead. Suggested questions and switch buttons need no model and appear at once.
 - **Smart mode:** the "Smart" button next to the question box (remembered per browser) makes answers dig deeper. After the normal result, the model plans up to three extra checks on the same account, for example the other drawdown basis, stop-outs or deposits in the window, or the trades inside it. The answer then adds a "Why:" paragraph that connects them (such as why an equity drawdown and a balance drawdown of the same days differ) and two or three "Worth asking next" questions you can click. The extra checks are under "Extra checks". It costs about one more AI call per question (usually 3 in all).
+- **Conversation focus:** each chat remembers what it is narrowed to (a period, a symbol, a magic number, buys or sells, or the one basket, drawdown or streak an answer found) and shows it as chips above the question box. Follow-ups keep it: after "Show my trades on 25 September", "what news was there that day?" asks about that day. A question that names its own period or asks about everything ("overall") leaves it. Tap × on a chip to drop that part, or "Clear" to start fresh.
 - **Answers:** typed questions are answered in chat bubbles, with a badge saying whether every number was checked. A line of labels on top says what was counted ("Baskets · 1 basket found", "Single trades", "Account drawdown (equity)"). Switch buttons below re-ask at another level: the trades in a basket or drawdown, the balance drawdown instead of equity, or the same question per basket or for single trades. A single-row answer leads with one large number, chosen by the question's words ("Did news cause my worst drawdown?" shows the news share and starts "Mostly not: only 2.39% of the losses ..."); suggested questions and switch buttons also get a checked plain sentence, still with no model call. When money was deposited inside a drawdown, a note says so and shows how far equity fell before the deposit, since the deposit makes the % look smaller; for summaries the table sits behind "Show data", while lists stay open. "Open chart" shows a single trade or basket on a price chart. Answers get an automatic chart when their shape suits one, plus a "How this was found" panel with the spec and SQL. Chats are saved in the browser, per account.
 - **Upload report:** drop an MT5 history report (.html) anywhere on the page to add or extend an account. This works the same as `make import`: stored deals are never overwritten.
 - **Sync now:** downloads new trades from MT5 without the terminal. `make web` also starts a small **sync worker** in the Wine image when MT5 is set up. The page asks it to sync through files in `data/sync/`; your credentials stay in `.env` and never pass through the page. To also sync on a timer, set `SYNC_EVERY_MINUTES` in `.env`. The sidebar shows when the account was last updated.
@@ -167,7 +168,10 @@ Answers are not cached: a new sync would change them, and each question is cheap
 make eval                     # about 160 model requests; paced for the free tier
 make eval ARGS="--limit 10"   # a quick check
 make eval-heldout             # 43 held-out questions, never used to tune the prompt
+make eval-followups           # follow-up questions, each asked after an earlier turn
 ```
+
+A follow-up question (`evals/followups.jsonl`) has an `"after"` turn: an earlier question and its gold spec, answered without a model call, so the follow-up is asked with that conversation's focus.
 
 | Gemini 3.5 Flash-Lite (free tier) | Run 1 | Run 2 | Run 3 (cost cuts) | Run 4 (live answers) | Run 5 |
 |---|---|---|---|---|---|
@@ -194,7 +198,7 @@ Run 4 was the first after answers began to lead with what was asked, explain dep
 - "Show me the trades of account 12345678" answered about the selected account: a question naming an account number is now refused.
 - Between runs, "trades that were part of a martingale" was once filtered as "in any basket": the prompt now points to the `martingale` tag.
 
-Run 5's one miss averaged the rows of the exposure table for "on average, how many lots do I have open" (run 1 made the same slip). The prompt now says why that is wrong and points to `avg_lots_open`; the question passed on a retest, but a full run 6 is still to come.
+Run 5's one miss averaged the rows of the exposure table for "on average, how many lots do I have open" (run 1 made the same slip). The prompt now says why that is wrong and points to `avg_lots_open`; run 6, after conversation focus was added, passed all 81 (100% result match, refusals and number check, 1.1 requests per question). The 6 follow-up questions (`make eval-followups`) passed 6/6 on their first run.
 
 **Held-out set.** `evals/heldout.jsonl` was written after all prompt tuning: 44 new questions (38 clear, 6 adversarial) in new wording, including baskets and streaks, each gold answer checked to return real data on the eval account. First and only scored run (Gemini 3.5 Flash-Lite, 2026-11-11):
 
@@ -206,7 +210,7 @@ Run 5's one miss averaged the rows of the exposure table for "on average, how ma
 | Number check passed | 100% |
 | Requests / tokens per question | 1.1 / 4,487 |
 
-The one miss ("What was the total lot size of my biggest basket?") was the app's fault, not the model's: the spec was right, but a list sorted by a column did not show that column. The code now always shows it, and the question moved to the tuned set (`seq-07`), so the held-out set has 43 questions for its next run. Its latest run, with all the changes above: 100% result match (37/37), 100% refusals (6/6), 100% number check, 1.1 requests per question. Reports: `evals/results/heldout/`.
+The one miss ("What was the total lot size of my biggest basket?") was the app's fault, not the model's: the spec was right, but a list sorted by a column did not show that column. The code now always shows it, and the question moved to the tuned set (`seq-07`), so the held-out set has 43 questions for its next run. Its latest runs, with all the changes above: 100% result match (37/37), 100% refusals (6/6), 100% number check, 1.0 to 1.1 requests per question. (One of them lost 3 questions to a Google "user location is not supported" error; those 3 passed when run again.) Reports: `evals/results/heldout/`.
 
 **Caveat:** the run 2 changes were made after seeing run 1's failures on these same questions, so run 2 partly measures tuning to this set. Run 1 is the fairer estimate for new questions; the held-out set below is the honest one. The plan's two-model comparison is not done yet: the free tier allows only about 20 requests a day on larger Gemini models. Reports: `evals/results/`.
 

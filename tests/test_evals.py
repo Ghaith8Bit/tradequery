@@ -55,6 +55,31 @@ def test_the_held_out_set_is_separate_and_every_gold_returns_data(path):
             assert rows and any(v is not None for r in rows for v in r), q["id"]
 
 
+
+def test_follow_ups_have_an_earlier_turn_and_every_gold_returns_data(path):
+    follow = load_questions(Path(__file__).parents[1] / "evals" / "followups.jsonl")
+    assert len(follow) >= 6 and len({q["id"] for q in follow}) == len(follow)
+    for q in follow:
+        assert execute(parse_spec(q["after"]["spec"]), path, SETTINGS).rows, q["id"]
+        rows = execute(parse_spec(q["gold"]), path, SETTINGS).rows
+        assert rows and any(v is not None for r in rows for v in r), q["id"]
+
+
+def test_a_follow_up_is_asked_with_the_earlier_turn_as_its_focus(path):
+    follow = load_questions(Path(__file__).parents[1] / "evals" / "followups.jsonl")
+    fake = FakeProvider(perfect_replies(follow, explain=False))
+    seen = []
+    real = fake.generate
+
+    def spy(system, prompt, **kw):
+        seen.append(prompt)
+        return real(system, prompt, **kw)
+
+    fake.generate = spy
+    report = run_suite(follow, path, SETTINGS, fake, explain=False)
+    assert [o.id for o in report.outcomes if not o.passed] == []
+    assert "Current focus: 14 Sep 2026" in seen[0] and "Previous question: Show my trades on 2026-09-14." in seen[0]
+
 def test_planted_news_gives_the_news_questions_real_answers(path):
     gold = {q["id"]: q["gold"] for q in QUESTIONS if "gold" in q}
     assert execute(parse_spec(gold["news-01"]), path, SETTINGS).rows
