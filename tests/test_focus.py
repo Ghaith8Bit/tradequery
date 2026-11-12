@@ -134,3 +134,14 @@ def test_the_focus_line_tells_the_model_which_trade_field_to_use():
     assert focus_line(None, "Balance drawdown 3") == "Balance drawdown 3 (its trades: drawdown_episode_id = 3)"
     assert focus_line(None, "Basket 12") == "Basket 12 (its trades: sequence_id = 12)"
     assert focus_line(DAY, None) == "25 Sep 2026; XAUUSD; Buys; Manual trades"
+
+
+
+def test_a_long_list_gets_the_plain_sentence_with_its_full_count(root):
+    from tradequery.ask import checked_template
+    from tradequery.execute import execute
+
+    spec = parse_spec({"entity": "trades", "order_by": [{"field": "close_time_utc", "direction": "asc"}]})
+    result = execute(spec, db.db_path(1001, root), SETTINGS)
+    assert len(result.rows) > 25
+    assert checked_template("which trades", spec, result) == f"{len(result.rows)} trades found, earliest first."
