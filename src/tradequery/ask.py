@@ -379,7 +379,7 @@ def checked_template(question: str, spec: QuerySpec, result: Result) -> str | No
     if not text:
         return None
     text = plain_words(text)
-    check = check_numbers(text, result.rows[:EXPLAIN_ROWS], extra_numbers=_numbers_in(spec),
+    check = check_numbers(text, result.rows[:EXPLAIN_ROWS], extra_numbers=_numbers_in(spec) + [len(result.rows)],
                           extra_text=[question, result.interpretation, *result.notes])
     return text if check.ok else None
 

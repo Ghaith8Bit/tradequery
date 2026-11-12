@@ -178,5 +178,8 @@ def template_answer(spec: QuerySpec, result: Result, question: str = "") -> str 
         text += " (the list was cut at its row limit)"
     if spec.order_by:
         o = spec.order_by[0]
-        text += f", {'highest' if o.direction == 'desc' else 'lowest'} {words(o.field)} first"
+        if o.field.endswith("time_utc"):
+            text += f", {'latest' if o.direction == 'desc' else 'earliest'} first"
+        else:
+            text += f", {'highest' if o.direction == 'desc' else 'lowest'} {words(o.field)} first"
     return text + "."
