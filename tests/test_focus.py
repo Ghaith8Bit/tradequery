@@ -108,3 +108,29 @@ def test_a_template_answer_in_a_chat_also_sets_the_focus(root):
     session = Session()
     ask("longest losing streak", db.db_path(1001, root), SETTINGS, fake, session)
     assert session.focus()[0]["label"].startswith("Streak ")
+
+
+
+def test_an_equity_drawdown_without_a_basis_column_is_still_named_equity(root):
+    from tradequery.execute import execute
+
+    spec = parse_spec({"entity": "drawdown_episodes", "fields": ["episode_id", "depth_abs"],
+                       "filters": [{"field": "basis", "op": "eq", "value": "balance"}],
+                       "order_by": [{"field": "depth_abs", "direction": "desc"}], "limit": 1})
+    result = execute(spec, db.db_path(1001, root), SETTINGS)
+    assert "basis" not in result.columns
+    session = Session()
+    session.remember("worst drawdown", spec, result)
+    assert session.item.startswith("Balance drawdown ") and session.found.endswith("(all balance drawdowns)")
+    equity = {**spec.model_dump(mode="json", exclude_defaults=True),
+              "filters": [{"field": "basis", "op": "eq", "value": "equity"}]}
+    assert found_item(equity, result).startswith("Equity drawdown ")
+
+
+def test_the_focus_line_tells_the_model_which_trade_field_to_use():
+    from tradequery.followup import focus_line
+
+    assert focus_line(None, "Equity drawdown 72") == "Equity drawdown 72 (its trades: equity_drawdown_episode_id = 72)"
+    assert focus_line(None, "Balance drawdown 3") == "Balance drawdown 3 (its trades: drawdown_episode_id = 3)"
+    assert focus_line(None, "Basket 12") == "Basket 12 (its trades: sequence_id = 12)"
+    assert focus_line(DAY, None) == "25 Sep 2026; XAUUSD; Buys; Manual trades"
