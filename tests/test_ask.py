@@ -279,3 +279,28 @@ def test_groups_get_their_total_so_the_model_need_not_add_counts(path):
     fake = FakeProvider([json.dumps(spec), "Of the 48 trades, results differed by symbol."])
     answer = ask("net profit by symbol", path, SETTINGS, fake)
     assert "trades in all" in fake.calls[1][1] and answer.verified  # 48 is the stated total, so it may be used
+
+
+def test_no_network_at_start_up_uses_the_usual_model():
+    import httpx
+    from types import SimpleNamespace
+
+    from google.genai import errors, types
+
+    from tradequery.llm import FALLBACK_MODEL, GeminiProvider
+
+    class Offline:
+        def list(self):
+            raise httpx.ConnectError("[Errno -3] Temporary failure in name resolution")
+
+    p = object.__new__(GeminiProvider)
+    p._types, p._errors, p._client = types, errors, SimpleNamespace(models=Offline())
+    assert p._auto_model() == FALLBACK_MODEL
+
+    class Broken:
+        def list(self):
+            raise ValueError("bug")
+
+    p._client = SimpleNamespace(models=Broken())
+    with pytest.raises(ValueError):  # a bug is not hidden as a network problem
+        p._auto_model()
