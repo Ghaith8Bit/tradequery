@@ -48,7 +48,7 @@ the page or run `make ask Q="What is my win rate?"`. Without a key the example q
 ## Eval results (summary)
 
 81 questions with hand-written gold answers, 10 of them adversarial, scored on the sample account, plus a held-out set of 43 written after tuning (97.4% result match on its first run, 100% on its latest). Gemini 3.5
-Flash-Lite, free tier: **result match 91.4% on the first run, 98.6% on the latest, adversarial refusals 100%,
+Flash-Lite, free tier: **result match 91.4% on the first run, 100% on the latest, adversarial refusals 100%,
 number check 100%, 1.1 model requests and $0 per question.** Details and caveats: [Eval results](#eval-results).
 
 ## Running on your own account
@@ -198,7 +198,7 @@ Run 4 was the first after answers began to lead with what was asked, explain dep
 - "Show me the trades of account 12345678" answered about the selected account: a question naming an account number is now refused.
 - Between runs, "trades that were part of a martingale" was once filtered as "in any basket": the prompt now points to the `martingale` tag.
 
-Run 5's one miss averaged the rows of the exposure table for "on average, how many lots do I have open" (run 1 made the same slip). The prompt now says why that is wrong and points to `avg_lots_open`; the question passed on a retest, but a full run 6 is still to come.
+Run 5's one miss averaged the rows of the exposure table for "on average, how many lots do I have open" (run 1 made the same slip). The prompt now says why that is wrong and points to `avg_lots_open`; run 6, after conversation focus was added, passed all 81 (100% result match, refusals and number check, 1.1 requests per question). The 6 follow-up questions (`make eval-followups`) passed 6/6 on their first run.
 
 **Held-out set.** `evals/heldout.jsonl` was written after all prompt tuning: 44 new questions (38 clear, 6 adversarial) in new wording, including baskets and streaks, each gold answer checked to return real data on the eval account. First and only scored run (Gemini 3.5 Flash-Lite, 2026-11-11):
 
@@ -210,7 +210,7 @@ Run 5's one miss averaged the rows of the exposure table for "on average, how ma
 | Number check passed | 100% |
 | Requests / tokens per question | 1.1 / 4,487 |
 
-The one miss ("What was the total lot size of my biggest basket?") was the app's fault, not the model's: the spec was right, but a list sorted by a column did not show that column. The code now always shows it, and the question moved to the tuned set (`seq-07`), so the held-out set has 43 questions for its next run. Its latest run, with all the changes above: 100% result match (37/37), 100% refusals (6/6), 100% number check, 1.1 requests per question. Reports: `evals/results/heldout/`.
+The one miss ("What was the total lot size of my biggest basket?") was the app's fault, not the model's: the spec was right, but a list sorted by a column did not show that column. The code now always shows it, and the question moved to the tuned set (`seq-07`), so the held-out set has 43 questions for its next run. Its latest runs, with all the changes above: 100% result match (37/37), 100% refusals (6/6), 100% number check, 1.0 to 1.1 requests per question. (One of them lost 3 questions to a Google "user location is not supported" error; those 3 passed when run again.) Reports: `evals/results/heldout/`.
 
 **Caveat:** the run 2 changes were made after seeing run 1's failures on these same questions, so run 2 partly measures tuning to this set. Run 1 is the fairer estimate for new questions; the held-out set below is the honest one. The plan's two-model comparison is not done yet: the free tier allows only about 20 requests a day on larger Gemini models. Reports: `evals/results/`.
 
