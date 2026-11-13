@@ -65,7 +65,7 @@ from .importers.mt5_report import ReportError
 from .ingest import import_report
 from .llm import LLMError, Provider, provider_from_env
 from .overview import build_overview
-from .pricechart import NotFound, sequence_chart, trade_chart
+from .pricechart import NotFound, in_server_time, sequence_chart, trade_chart
 from .scope import GROUPS, account_levels, describe
 from .settings import Settings, data_dir, load_settings
 from .spec import SpecError, parse_spec
@@ -335,14 +335,14 @@ def create_app(*, data_root: Path | str | None = None, settings: Settings | None
     @app.get("/api/trade")
     def trade(login: int, position_id: int):
         try:
-            return trade_chart(account_path(login), position_id)
+            return in_server_time(trade_chart(account_path(login), position_id), settings.clock)
         except NotFound as error:
             raise HTTPException(404, str(error)) from None
 
     @app.get("/api/sequence")
     def sequence(login: int, sequence_id: int):
         try:
-            return sequence_chart(account_path(login), sequence_id)
+            return in_server_time(sequence_chart(account_path(login), sequence_id), settings.clock)
         except NotFound as error:
             raise HTTPException(404, str(error)) from None
 

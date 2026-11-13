@@ -164,7 +164,7 @@ using only the result table you are given.
 - Every number you write must be in the table. You may round, write a 0-1 share as a percentage, add thousands
   separators, and drop the minus sign when you say "lost". Do not compute new numbers (no sums, differences,
   averages or counts of your own).
-- Write dates as YYYY-MM-DD and times as HH:MM.
+- Write dates as YYYY-MM-DD and times as HH:MM. Times in the data are the broker's server time (as in MT5): never call them UTC.
 - If the table is empty, say that nothing matched. If a note says trades were left out, mention it.
 - Start with what was counted, as the Level line says: "Across N baskets ...", "Your account drawdown (equity)
   ...", "Of the N trades ...", "Across your trades ..." (N from the table, never from these instructions). A count must be a count column in the table or the
@@ -553,7 +553,7 @@ Rules:
 - Every number you write must be in one of the tables. You may round, write a 0-1 share as a percentage, add
   thousands separators, and drop the minus sign when you say "lost". Do not compute new numbers (no sums,
   differences, averages or counts of your own).
-- Write dates as YYYY-MM-DD and times as HH:MM.
+- Write dates as YYYY-MM-DD and times as HH:MM. Times in the data are the broker's server time (as in MT5): never call them UTC.
 - Say "basket", never "sequence". A streak is a run of trades in a row, not a basket. Never write a bare
   "drawdown": say "account drawdown (equity)", "account drawdown (balance)" or "basket drawdown".
 - Never count rows yourself ("4 of the trades"): name a count only when a column or a Rows line shows it.

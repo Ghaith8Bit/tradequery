@@ -14,7 +14,7 @@ import re
 FOCUS = (
     (r"\bnews\b|\bnfp\b|\bcpi\b|calendar", ("news_loss_share", "news_overlap")),
     (r"how long|duration|\blasted\b|\blast\W*$", ("duration_days", "hold_minutes")),  # not "my last trade"
-    (r"recover", ("recovery_time_utc",)),
+    (r"recover", ("recovery_time",)),
     (r"how many trades|which trades|trades (?:were )?in", ("trade_count",)),
     (r"\bswaps?\b", ("swap_total", "swap")),
     (r"commission", ("commission_total", "commission")),

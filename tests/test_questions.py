@@ -95,7 +95,8 @@ def test_peak_lots_open(account):
     best = max(((sum(o.lots for o in trades if o.open_time_utc <= t.open_time_utc < o.close_time_utc), t.open_time_utc)
                 for t in trades), key=lambda x: (x[0], -x[1].timestamp()))
     assert row["gross_lots"] == pytest.approx(best[0])
-    assert row["time_utc"] == db.format_time(best[1])
+    # answers give times in the broker's server time, in a column without "_utc"
+    assert row["time"] == SETTINGS.clock.from_utc(best[1]).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def test_deposits_and_withdrawals_per_month(account):
@@ -189,3 +190,21 @@ def test_a_list_sorted_by_a_column_shows_that_column(account):
     spec = {"entity": "sequences", "order_by": [{"field": "total_lots", "direction": "desc"}], "limit": 1}
     result = ask(account[0], spec)
     assert "total_lots" in result.columns  # not a default column, but the question is about it
+
+
+def test_answers_give_times_in_server_time_like_the_calendar(account):
+    """A trade closed at 22:56 UTC on 1 Oct closed at 01:56 on 2 Oct in server time (UTC+3 in summer)."""
+    from tradequery.execute import in_server_time, server_column
+
+    assert server_column("close_time_utc") == "close_time" and server_column("time_utc") == "time"
+    assert server_column("start_utc") == "start_time"
+    columns, rows = in_server_time(["position_id", "close_time_utc"], [[1, "2026-10-01 22:56:24"], [2, None]],
+                                   SETTINGS.clock)
+    assert columns == ["position_id", "close_time"]
+    assert rows == [[1, "2026-10-02 01:56:24"], [2, None]]
+    path, trades, _ = account
+    result = ask(path, parse_spec({"entity": "trades", "fields": ["position_id", "close_time_utc"],
+                                   "order_by": [{"field": "close_time_utc", "direction": "asc"}], "limit": 1}))
+    first = min(trades, key=lambda t: (t.close_time_utc, t.position_id))
+    assert result.columns == ["position_id", "close_time"]
+    assert result.rows[0][1] == SETTINGS.clock.from_utc(first.close_time_utc).strftime("%Y-%m-%d %H:%M:%S")

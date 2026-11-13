@@ -110,3 +110,25 @@ def sequence_chart(path: Path, sequence_id: int) -> dict:
         conn.close()
     out.update(kind="sequence", sequence=dict(seq), trades=trades, lines=[])
     return out
+
+
+def in_server_time(out: dict, clock) -> dict:
+    """A chart in the broker's server time, like the answers, the calendar and MT5.
+
+    The payload keeps its stored key names (open_time_utc, ...); ``times`` says the
+    values are server time."""
+    from .execute import server_time
+
+    def conv(text):
+        return server_time(clock, text) if isinstance(text, str) and text else text
+
+    for candle in out["candles"]:
+        candle[0] = conv(candle[0])
+    for marker in out["markers"]:
+        marker["time"] = conv(marker["time"])
+    for part in [out.get("trade"), out.get("sequence"), *(out.get("trades") or [])]:
+        for key in list(part or {}):
+            if key.endswith("_utc"):
+                part[key] = conv(part[key])
+    out["times"] = "server"
+    return out

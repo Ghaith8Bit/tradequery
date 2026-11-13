@@ -119,7 +119,8 @@ def execute(spec: QuerySpec, path, settings: Settings, *, seconds: float = QUERY
             # Cut short only counts when the spec did not ask for that many rows (a top-1 is not "more").
             truncated = len(rows) > cap and (spec.limit is None or spec.limit == MAX_ROWS) and spec.as_of is None
             rows = rows[:cap]
-            notes = deposit_notes(conn, spec, columns, rows) if spec.entity == "drawdown_episodes" else []
+            notes = deposit_notes(conn, spec, columns, rows, settings.clock) if spec.entity == "drawdown_episodes" else []
+            columns, rows = in_server_time(columns, rows, settings.clock)
             return Result("query", columns, rows, truncated, interpretation, notes, sql)
         return _execute_metrics(conn, spec, settings, account, interpretation, seconds)
     finally:
@@ -129,7 +130,33 @@ def execute(spec: QuerySpec, path, settings: Settings, *, seconds: float = QUERY
 MAX_DEPOSIT_NOTES = 3
 
 
-def deposit_notes(conn, spec: QuerySpec, columns: list[str], rows: list) -> list[str]:
+def server_column(column: str) -> str:
+    """The name a stored UTC time column gets in an answer: close_time_utc -> close_time, start_utc -> start_time."""
+    base = column[:-4]
+    return base if base == "time" or base.endswith("_time") else base + "_time"
+
+
+def server_time(clock, text: str) -> str:
+    """A stored UTC time ("2026-10-01 22:56:24") as the broker's server time, in the same text form."""
+    return clock.from_utc(db.parse_time(text)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def in_server_time(columns: list[str], rows: list, clock) -> tuple[list[str], list]:
+    """Answers show times in the broker's server time, like MT5 and the calendar (stored times stay UTC).
+
+    The columns are renamed without "_utc", so nothing downstream (the page, the
+    templates, the model) can mistake a server time for UTC."""
+    at = [i for i, c in enumerate(columns) if c.endswith("_utc")]
+    if not at:
+        return columns, rows
+    for row in rows:
+        for i in at:
+            if isinstance(row[i], str) and row[i]:
+                row[i] = server_time(clock, row[i])
+    return [server_column(c) if i in at else c for i, c in enumerate(columns)], rows
+
+
+def deposit_notes(conn, spec: QuerySpec, columns: list[str], rows: list, clock) -> list[str]:
     """Say when money was added inside a drawdown: its % then divides by more money and looks smaller.
 
     For each drawdown in the result (at most 3) with deposits between its peak and its low: the deposits,
@@ -156,7 +183,7 @@ def deposit_notes(conn, spec: QuerySpec, columns: list[str], rows: list) -> list
             notes.append(f"Money was added during drawdown {row[at]}, so its % divides by more money and looks smaller.")
             continue
         total = sum(d[1] for d in deposits)
-        days = ", ".join(sorted({d[0][:10] for d in deposits}))
+        days = ", ".join(sorted({server_time(clock, d[0])[:10] for d in deposits}))
         word = "A deposit" if len(deposits) == 1 else f"{len(deposits)} deposits"
         note = (f"{word} of {total:,.2f} on {days} fell inside drawdown {row[at]}; its % divides by the money at "
                 "stake including it, so it looks smaller than the loss felt.")
@@ -165,7 +192,7 @@ def deposit_notes(conn, spec: QuerySpec, columns: list[str], rows: list) -> list
             start, low, low_time = before
             if start > 0 and low < start:
                 fall = math.floor((start - low) / start * 10000) / 100  # rounded down: 99.997% is not "100%"
-                note += (f" Before that deposit, {basis} fell from {start:,.2f} to {low:,.2f} on {low_time[:16]} UTC "
+                note += (f" Before that deposit, {basis} fell from {start:,.2f} to {low:,.2f} on {server_time(clock, low_time)[:16]} "
                          f"({fall:.2f}% below where the drawdown began).")
         notes.append(note)
     return notes

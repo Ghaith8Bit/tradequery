@@ -38,7 +38,7 @@ def root(tmp_path):
 def test_question_words_pick_the_column():
     assert focus_columns("Did news cause my worst drawdown?")[0] == "news_loss_share"
     assert focus_columns("How long did my worst drawdown last?")[0] == "duration_days"
-    assert focus_columns("Has it recovered?") == ("recovery_time_utc",)
+    assert focus_columns("Has it recovered?") == ("recovery_time",)
     assert focus_columns("Show my last trade") == ()  # "last" here is not a duration
     assert focus_columns("What was my worst drawdown?") == ()
     assert focus_column("news?", ["depth_abs", "news_loss_share"]) == "news_loss_share"

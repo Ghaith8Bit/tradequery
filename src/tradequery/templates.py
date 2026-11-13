@@ -74,20 +74,20 @@ def _drawdown(row: dict, spec: QuerySpec, question: str = "") -> str | None:
         lead = news_verdict(row["news_loss_share"]) + " "
     elif focus == "duration_days" and row.get("duration_days") is not None:
         lead = f"It lasted {value_text('duration_days', row['duration_days'])} days. "
-    elif focus == "recovery_time_utc":
-        lead = (f"It recovered on {value_text('t', row['recovery_time_utc'])} UTC. " if row["recovery_time_utc"]
+    elif focus == "recovery_time":
+        lead = (f"It recovered on {value_text('t', row['recovery_time'])}. " if row["recovery_time"]
                 else "It has not recovered yet. ")
     basis = row.get("basis") or basis_of(spec) or "balance"
     text = lead + f"Your account drawdown ({basis}) went {value_text('depth_abs', row['depth_abs'])} deep"
     if row.get("depth_pct") is not None:
         text += f" ({value_text('depth_pct', row['depth_pct'])} of the money at stake)"
-    if row.get("peak_time_utc") and row.get("trough_time_utc"):
-        text += f", from its peak on {value_text('t', row['peak_time_utc'])} to its low on {value_text('t', row['trough_time_utc'])}"
-    if "recovery_time_utc" in row:
-        text += f", recovered on {value_text('t', row['recovery_time_utc'])}" if row["recovery_time_utc"] else ", not recovered yet"
+    if row.get("peak_time") and row.get("trough_time"):
+        text += f", from its peak on {value_text('t', row['peak_time'])} to its low on {value_text('t', row['trough_time'])}"
+    if "recovery_time" in row:
+        text += f", recovered on {value_text('t', row['recovery_time'])}" if row["recovery_time"] else ", not recovered yet"
     if row.get("trade_count") is not None:
         text += f"; {row['trade_count']} trades closed in it"
-    return text + " (times in UTC)." if "peak_time_utc" in row else text + "."
+    return text + " (server time)." if "peak_time" in row else text + "."
 
 
 def _basket(row: dict) -> str | None:
@@ -107,7 +107,7 @@ def _basket(row: dict) -> str | None:
         if row.get("drawdown_pct") is not None:
             text += f" ({value_text('drawdown_pct', row['drawdown_pct'])} of equity)"
     rest = _pairs(row, skip={"symbol", "side", "type", "depth", "net_pnl", "is_win", "drawdown_abs", "drawdown_pct",
-                             "start_utc", "end_utc", "first_lot", "max_lot", "news_overlap", "drawdown_time_utc",
+                             "start_time", "end_time", "first_lot", "max_lot", "news_overlap", "drawdown_time",
                              "equity_at_start"})
     return text + (f"; {rest}" if rest else "") + "."
 
@@ -117,8 +117,8 @@ def _streak(row: dict) -> str | None:
         return None
     kind = {"loss": "losing", "win": "winning"}.get(row.get("type"), "")
     text = f"A {kind + ' ' if kind else ''}streak of {row['length']} trades in a row"
-    if row.get("start_utc") and row.get("end_utc"):
-        text += f", from {value_text('t', row['start_utc'])} to {value_text('t', row['end_utc'])} UTC"
+    if row.get("start_time") and row.get("end_time"):
+        text += f", from {value_text('t', row['start_time'])} to {value_text('t', row['end_time'])} (server time)"
     if row.get("net_pnl") is not None:
         text += f", net {value_text('net_pnl', row['net_pnl'])}"
     return text + "."
