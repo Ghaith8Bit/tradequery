@@ -18,6 +18,8 @@ FOCUS = (
     (r"how many trades|which trades|trades (?:were )?in", ("trade_count",)),
     (r"\bswaps?\b", ("swap_total", "swap")),
     (r"commission", ("commission_total", "commission")),
+    (r"win\W?rate|winning (?:rate|percent|%)|how often (?:do|did) i win", ("win_rate",)),
+    (r"profit factor", ("profit_factor",)),
 )
 
 
