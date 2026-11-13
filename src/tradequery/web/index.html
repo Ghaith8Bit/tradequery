@@ -226,6 +226,10 @@
   .more-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 6px 0 0; font-size: 13px; }
   details.details { margin-top: 10px; font-size: 13px; }
   details.details summary { cursor: pointer; color: var(--muted); }
+  details.more-details summary { color: var(--accent); font-weight: 600; }
+  details.more-details .answer-text { font-size: 14.5px; margin-top: 6px; }
+  .note .link-btn { font-size: 13px; }
+  .table-btns { display: flex; flex-wrap: wrap; gap: 4px 18px; }
   .interp { color: var(--muted); border-left: 3px solid var(--accent-soft); padding-left: 8px; margin: 8px 0; }
   pre { background: var(--code); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12px; white-space: pre-wrap;
         word-break: break-word; margin: 6px 0; }
@@ -1235,11 +1239,27 @@ function listTotals(result) {
   return { count: result.rows.length, noun: idCol === "sequence_id" ? "basket" : "trade", sums,
            won: pi >= 0 ? result.rows.filter((r) => r[pi] > 0).length : null };
 }
-function renderTable(result, limit) {
+/* a long list first shows the few columns people read; "Show all columns" brings back the rest */
+const COMPACT_COLS = {
+  position_id: ["position_id", "net_profit", "profit", "canonical_symbol", "symbol", "side", "lots", "close_time"],
+  sequence_id: ["sequence_id", "net_pnl", "symbol", "side", "depth", "start_time"],
+};
+const COMPACT_MAX = 6;
+// a field of the question (sorted or filtered by it) as the answer names it: stored _utc times arrive in server time
+const answerColumn = (f) => f.replace(/^(start|end)_utc$/, "$1_time").replace(/_utc$/, "");
+function compactColumns(result, keep) {
+  const id = result.columns.find((c) => COMPACT_COLS[c]);
+  if (!id) return null;
+  const wanted = new Set([...COMPACT_COLS[id], ...keep]);
+  const cols = result.columns.filter((c) => wanted.has(c));
+  return result.columns.length - cols.length > 1 ? cols : null;  // hiding just one column is not worth a button
+}
+function renderTable(result, limit, shown = null) {
   const wrap = el("div", { class: "table-wrap" });
   const box = el("div");
   const magic = sameEverywhere(result, "magic");
   let order = columnOrder(result);
+  if (shown) order = order.filter((i) => shown.includes(result.columns[i]));
   if (magic !== null) {
     order = order.filter((i) => result.columns[i] !== "magic");
     box.appendChild(el("div", { class: "table-note" }, magic === 0 ? "All manual trades" : `All by EA (magic) ${magic}`));
@@ -1343,21 +1363,61 @@ function downloadCsv(r, name) {
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+/* [first sentence, the rest] of an answer; a short answer stays whole */
+const LEAD_MIN = 170, NOTE_MAX = 160;
+function splitAnswer(text) {
+  const t = text.trim();
+  if (t.length <= LEAD_MIN) return [t, ""];
+  const nl = t.indexOf("\n");  // a list or paragraphs: the first line leads, the rest keeps its lines
+  if (nl > 0) return [t.slice(0, nl).trim(), t.slice(nl + 1).trim()];
+  // a sentence ends at . ! or ? followed by a space and a capital (not inside 62.77% or 1,000.50)
+  const parts = t.split(/(?<=[.!?])\s+(?=[A-Z"(])/);
+  let lead = parts.shift();
+  if (lead.length < 60 && parts.length) lead += " " + parts.shift();  // a very short opener takes the next sentence too
+  const rest = parts.join(" ").trim();
+  return rest.length < 40 ? [t, ""] : [lead, rest];
+}
+/* the long deposit-inside-a-drawdown note as one line, with the worst-drop page one click away */
+function depositLine(note) {
+  const m = /(?:deposits?|Money was added)\b.*?drawdown (\d+)/.exec(note);
+  if (!m) return null;
+  const box = el("div", { class: "note" }, "Money was added during this drop, so its % looks smaller than the loss felt. ");
+  const d = state.overview && state.overview.worst_drop;
+  if (d && String(d.episode_id) === m[1]) {
+    const go = el("button", { class: "link-btn", type: "button" }, "See what happened");
+    go.addEventListener("click", openDrop);
+    box.appendChild(go);
+  }
+  return box;
+}
 function renderAnswer(bubble, data, question = null) {
   const r = data.result;
   const line = scopeLine(data);
   if (line) bubble.appendChild(line);
   const h = data.scope && data.scope.headline;
   if (r && h) bubble.appendChild(headlineNode(h, r));
-  if (data.text) bubble.appendChild(el("div", { class: "answer-text" }, data.text));
+  // the first sentence answers; the rest of the text and the long notes wait under "More details"
+  const more = el("details", { class: "details more-details" });
+  more.appendChild(el("summary", {}, "More details"));
+  if (data.text) {
+    const [lead, rest] = splitAnswer(data.text);
+    bubble.appendChild(el("div", { class: "answer-text" }, lead));
+    if (rest) more.appendChild(el("div", { class: "answer-text" }, rest));
+  }
   if (data.error) bubble.appendChild(el("div", { class: "error" }, data.error));
   if (data.error_detail) {
     const why = el("details", { class: "details" });
     why.append(el("summary", {}, "Why"), el("div", { class: "interp" }, data.error_detail));
     bubble.appendChild(why);
   }
-  if (!r) return;
-  r.notes.forEach((n) => bubble.appendChild(el("div", { class: "note" }, n)));
+  if (!r) { if (more.childElementCount > 1) bubble.appendChild(more); return; }
+  r.notes.forEach((n) => {
+    const short = depositLine(n);
+    if (short) { bubble.appendChild(short); more.appendChild(el("div", { class: "note" }, n)); }
+    else if (n.length > NOTE_MAX) more.appendChild(el("div", { class: "note" }, n));
+    else bubble.appendChild(el("div", { class: "note" }, n));
+  });
+  if (more.childElementCount > 1) bubble.appendChild(more);
   const chart = autoChart(r);
   if (chart) bubble.appendChild(chart);
 
@@ -1383,13 +1443,32 @@ function renderAnswer(bubble, data, question = null) {
   if (r.rows.length) {
     tableBox = el("div");
     const LIMIT = 8;
-    let wrap = renderTable(r, LIMIT);
+    const spec = data.spec || {};
+    const keep = [...(spec.order_by || []).map((o) => o.field), ...(spec.filters || []).map((f) => f.field),
+                  ...((spec.fields || []).length <= COMPACT_MAX ? spec.fields || [] : []), ...(h ? [h.column] : [])].map(answerColumn);
+    const compact = compactColumns(r, keep);
+    const view = { rows: LIMIT, cols: compact };
+    let wrap = renderTable(r, view.rows, view.cols);
+    const redraw = () => { const t = renderTable(r, view.rows, view.cols); wrap.replaceWith(t); wrap = t; };
     tableBox.appendChild(wrap);
+    const btns = el("div", { class: "table-btns" });
     if (r.rows.length > LIMIT) {
       const more = el("button", { class: "more-btn", type: "button" }, `Show all ${r.rows.length} rows`);
-      more.addEventListener("click", () => { const full = renderTable(r, r.rows.length); wrap.replaceWith(full); wrap = full; more.remove(); });
-      tableBox.appendChild(more);
+      more.addEventListener("click", () => { view.rows = r.rows.length; redraw(); more.remove(); });
+      btns.appendChild(more);
     }
+    if (compact) {
+      const hidden = r.columns.length - compact.length;
+      const cols = el("button", { class: "more-btn", type: "button", "aria-expanded": "false" }, `Show all columns (+${hidden})`);
+      cols.addEventListener("click", () => {
+        view.cols = view.cols ? null : compact;
+        cols.setAttribute("aria-expanded", String(!view.cols));
+        cols.textContent = view.cols ? `Show all columns (+${hidden})` : "Fewer columns";
+        redraw();
+      });
+      btns.appendChild(cols);
+    }
+    if (btns.childElementCount) tableBox.appendChild(btns);
     // a summary answer (one big number or a chart, with checked text) keeps its table one click away; lists stay open
     if (data.text && (h || chart)) {
       tableBox.hidden = true;
