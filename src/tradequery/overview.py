@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import db, metrics
+from .dropstory import worst_drop
 from .settings import Settings
 
 CURVE_POINTS = 400  # the balance chart never needs more than this
@@ -46,6 +47,7 @@ def build_overview(path: Path, settings: Settings) -> dict:
         worst_winner = conn.execute("SELECT sequence_id, drawdown_abs, drawdown_pct FROM v_sequences "
                                     "WHERE is_win = 1 AND drawdown_pct IS NOT NULL ORDER BY drawdown_pct DESC "
                                     "LIMIT 1").fetchone()
+        drop = worst_drop(conn, settings.clock)
     finally:
         conn.close()
 
@@ -55,6 +57,7 @@ def build_overview(path: Path, settings: Settings) -> dict:
         "first": db.format_time(trades[0].open_time_utc) if trades else None,
         "last": db.format_time(trades[-1].close_time_utc) if trades else None,
         "stats": None, "balance_curve": [], "by_weekday": [], "facts": [], "daily": [], "monthly": [],
+        "worst_drop": drop,
     }
     if not trades:
         return out
