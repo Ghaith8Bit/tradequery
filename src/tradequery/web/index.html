@@ -543,17 +543,20 @@ function cell(col, v, shares) {
 // column names in plain words; a "sequence" is shown as a basket everywhere
 const NAMES = {
   sequence_id: "basket", depth: "legs", max_lot_multiplier: "lot multiplier", max_open: "most open at once",
-  drawdown_abs: "basket drawdown", drawdown_pct: "basket drawdown (% of equity)", drawdown_time_utc: "deepest at (UTC)",
+  drawdown_abs: "basket drawdown", drawdown_pct: "basket drawdown (% of equity)", drawdown_time: "deepest at",
   equity_at_start: "equity at start", net_pnl: "net", is_win: "won", position_id: "trade",
   episode_id: "drawdown", depth_abs: "depth", depth_pct: "depth (% at stake)",
   drawdown_episode_id: "balance drawdown", equity_drawdown_episode_id: "equity drawdown",
-  canonical_symbol: "symbol", net_profit: "profit", open_time_utc: "opened (UTC)", close_time_utc: "closed (UTC)",
+  canonical_symbol: "symbol", net_profit: "profit", open_time: "opened", close_time: "closed", peak_time: "peak", trough_time: "lowest point",
+  recovery_time: "recovered", start_time: "started", end_time: "ended",
   hold_minutes: "held (min)", magic: "EA (magic)", close_reason: "closed by", trade_count: "trades",
 };
 // the money result of a row; lists show it right after the id and add it up
 const PROFIT_COLS = ["net_profit", "net_pnl", "profit", "net"];
 const SUM_COLS = new Set([...PROFIT_COLS, "swap", "commission", "lots", "swap_total", "commission_total"]);
 const ID_COLS = ["position_id", "sequence_id", "episode_id"];
+// answer times arrive in the broker's server time, in columns like close_time (stored UTC columns end in _utc)
+const isTimeCol = (c) => c === "time" || c.endsWith("_time") || c.endsWith("_utc");
 const label = (c) => NAMES[c] || c.replaceAll("_", " ");
 const store = {
   key: (login) => `tq.chats.${login}`,
@@ -617,7 +620,7 @@ function autoChart(result) {
   if (catIdx < 0) return null;
   const valIdx = columns.findIndex((c, i) => i !== catIdx && numeric(i) && !/(_id|_low|_high)$/.test(c) && c !== "trades");
   if (valIdx < 0) return null;
-  if (columns[catIdx].endsWith("_utc")) {
+  if (isTimeCol(columns[catIdx])) {
     return rows.length >= 6 ? lineChart(rows.map((r) => [r[catIdx], r[valIdx]])) : null;
   }
   const asPercent = result.share_columns.includes(columns[valIdx]);
@@ -686,7 +689,7 @@ function candleChart(data) {
     const g = svg("g", { opacity: 0.55 });
     g.appendChild(svg("line", { x1: x, x2: x, y1: y(h), y2: y(l), stroke: color }));
     g.appendChild(svg("rect", { x: x - bw / 2, y: y(Math.max(o, c)), width: bw, height: Math.max(1, Math.abs(y(o) - y(c))), fill: color }));
-    g.appendChild(svg("title", {}, `${t} UTC  O ${o} H ${h} L ${l} C ${c}`));
+    g.appendChild(svg("title", {}, `${t}  O ${o} H ${h} L ${l} C ${c}`));
     root.appendChild(g);
   });
   shown.forEach((l) => {
@@ -709,11 +712,11 @@ function candleChart(data) {
       const up = m.side === "buy", s = 7;
       shape = svg("path", { d: up ? `M${x},${py - s} L${x + s},${py + s} L${x - s},${py + s} Z` : `M${x},${py + s} L${x + s},${py - s} L${x - s},${py - s} Z`,
         fill: up ? "var(--accent)" : "var(--warn)", stroke: "var(--panel)", "stroke-width": 1 });
-      shape.appendChild(svg("title", {}, `Entry ${m.side} ${m.lots} lots at ${m.price} · ${m.time} UTC` + (many > 1 ? ` · level ${m.level}` : "")));
+      shape.appendChild(svg("title", {}, `Entry ${m.side} ${m.lots} lots at ${m.price} · ${m.time}` + (many > 1 ? ` · level ${m.level}` : "")));
       if (many > 1 && many <= 16) root.appendChild(svg("text", { x: x - 9, y: py + 4, "text-anchor": "end", "font-size": 10, fill: "var(--muted)" }, String(m.level)));
     } else {
       shape = svg("circle", { cx: x, cy: py, r: 5, fill: (m.net || 0) >= 0 ? "var(--good)" : "var(--neg)", stroke: "var(--panel)", "stroke-width": 1.5 });
-      shape.appendChild(svg("title", {}, `Exit at ${m.price} · ${m.time} UTC · net ${fmt2.format(m.net || 0)}`));
+      shape.appendChild(svg("title", {}, `Exit at ${m.price} · ${m.time} · net ${fmt2.format(m.net || 0)}`));
     }
     root.appendChild(shape);
   });
@@ -733,7 +736,7 @@ function legend(data) {
   item(icon("M6,11 L11,1 L1,1 Z", "var(--warn)"), "sell entry");
   item(icon("M6,1 a5,5 0 1,0 0.01,0 Z", "var(--good)"), "exit in profit");
   item(icon("M6,1 a5,5 0 1,0 0.01,0 Z", "var(--neg)"), "exit at a loss");
-  box.appendChild(el("span", {}, `${data.symbol} · ${data.minutes_per_candle}-minute candles · UTC`));
+  box.appendChild(el("span", {}, `${data.symbol} · ${data.minutes_per_candle}-minute candles · server time`));
   return box;
 }
 function chartBlock(data, body) {
@@ -767,8 +770,8 @@ async function openChart(kind, id) {
     $("modalTitle").textContent = `Trade ${t.position_id} · ${t.symbol} ${t.side} ${t.lots} lots`;
     chartBlock(data, body);
     body.appendChild(kv([
-      ["Opened (UTC)", `${t.open_time_utc.slice(0, 16)} at ${t.open_price}`],
-      ["Closed (UTC)", `${t.close_time_utc.slice(0, 16)} at ${t.close_price}`],
+      ["Opened", `${t.open_time_utc.slice(0, 16)} at ${t.open_price}`],
+      ["Closed", `${t.close_time_utc.slice(0, 16)} at ${t.close_price}`],
       ["Net result", `${money(t.net_profit)}`], ["Held", hours(t.hold_minutes)],
       ["Closed by", REASONS[t.close_reason] || t.close_reason], ["Stop loss", t.sl ? String(t.sl) : "none"],
       ["Take profit", t.tp ? String(t.tp) : "none"], ["Outcome", t.outcome || "–"],
@@ -786,7 +789,7 @@ async function openChart(kind, id) {
       ["Basket drawdown", s.drawdown_abs === null || s.drawdown_abs === undefined ? "needs price bars"
         : `${money(s.drawdown_abs)} (${pct(s.drawdown_pct)} of equity)`],
       ["Legs", String(s.depth)], ["Lots", `${s.first_lot} → ${s.max_lot} (${s.max_lot_multiplier}×)`],
-      ["Most open at once", String(s.max_open)], ["Started (UTC)", s.start_utc.slice(0, 16)], ["Ended (UTC)", s.end_utc.slice(0, 16)],
+      ["Most open at once", String(s.max_open)], ["Started", s.start_utc.slice(0, 16)], ["Ended", s.end_utc.slice(0, 16)],
       ["Net result", money(s.net_pnl)], ["Outcome", s.is_win ? "closed in profit" : "closed at a loss"],
     ]));
     const result = {
@@ -1285,6 +1288,7 @@ function renderTable(result, limit) {
   }
   wrap.appendChild(table);
   box.appendChild(wrap);
+  if (order.some((i) => isTimeCol(result.columns[i]))) box.appendChild(el("div", { class: "table-note" }, "Times are your broker's server time, as in MT5."));
   if (totals) {
     const won = totals.won === null ? "" : ` · ${totals.won} in profit (${Math.round(totals.won / totals.count * 100)}%)`;
     box.appendChild(el("div", { class: "table-note" },
