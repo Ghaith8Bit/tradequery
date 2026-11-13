@@ -107,3 +107,14 @@ def test_baskets_carry_trade_fields(tmp_path):
 def test_clarify_answers_have_no_scope():
     assert describe(parse_spec({"kind": "clarify", "message": "How big?"}), None, has_equity=True,
                     has_baskets=True) is None
+
+
+def test_the_headline_prefers_the_result_over_a_count_unless_the_count_was_asked():
+    from tradequery.scope import headline
+
+    week = parse_spec({"entity": "trades", "metrics": ["trade_count", "win_rate", "net_profit", "profit_factor"]})
+    row = result(["trade_count", "win_rate", "net_profit", "profit_factor"], [[403, 0.6203, 1342.43, 1.56]])
+    assert headline(week, row, "how did I do last week?")["column"] == "net_profit"
+    assert headline(week, row, "what was my win rate last week?")["column"] == "win_rate"
+    assert headline(week, row, "and the profit factor?")["column"] == "profit_factor"
+    assert headline(week, row, "how many trades did I take last week?")["column"] == "trade_count"

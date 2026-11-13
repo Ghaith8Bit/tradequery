@@ -123,7 +123,12 @@
   th { background: var(--code); text-align: left; font-weight: 600; }
   th::first-letter { text-transform: uppercase; }
   tr:last-child td { border-bottom: 0; }
-  td.num { text-align: right; } td.neg { color: var(--neg); }
+  td.num { text-align: right; } td.neg { color: var(--neg); } td.pos { color: var(--good); }
+  tfoot td { font-weight: 700; border-top: 2px solid var(--line); border-bottom: 0; background: var(--code); }
+  .table-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .retry-btn { margin-top: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 10px;
+               padding: 6px 14px; cursor: pointer; font: inherit; font-size: 13px; }
+  .retry-btn:hover { border-color: var(--accent); color: var(--accent); }
   .more-btn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 6px 0 0; font-size: 13px; }
   details.details { margin-top: 10px; font-size: 13px; }
   details.details summary { cursor: pointer; color: var(--muted); }
@@ -175,7 +180,8 @@
 
   /* clickable ids in answer tables */
   .id-link { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit;
-             text-decoration: underline; text-underline-offset: 2px; }
+             text-decoration: underline; text-underline-offset: 2px; display: inline-flex; align-items: center; gap: 4px; }
+  .id-link .ic { flex: none; }
 
   /* the chart window */
   .modal { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .45); display: grid; place-items: center; padding: 16px; }
@@ -230,7 +236,7 @@
   /* answer card: one big number, the text, then actions; the table is one click away for summaries */
   .headline { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 2px 0 4px; }
   .headline .hv { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-  .headline .hv.neg { color: var(--neg); }
+  .headline .hv.neg { color: var(--neg); } .headline .hv.pos { color: var(--good); }
   .headline .hl { color: var(--muted); font-size: 14px; }
   .chip { display: inline-flex; align-items: center; gap: 6px; }
   .chip.ghost { color: var(--muted); background: transparent; }
@@ -397,6 +403,7 @@ function cell(col, v, shares) {
     if (shares.includes(col)) return (v * 100).toFixed(2) + "%";
     if (/lot/.test(col) && !/multiplier/.test(col)) return v.toFixed(2);
     if (Number.isInteger(v)) return String(v);
+    if (PROFIT_COLS.includes(col) || /swap|commission|profit|pnl/.test(col)) return fmt2.format(v);  // money: always 2 decimals
     return Math.abs(v) < 1 ? v.toFixed(4) : fmt2.format(v);
   }
   return String(v);
@@ -408,7 +415,13 @@ const NAMES = {
   equity_at_start: "equity at start", net_pnl: "net", is_win: "won", position_id: "trade",
   episode_id: "drawdown", depth_abs: "depth", depth_pct: "depth (% at stake)",
   drawdown_episode_id: "balance drawdown", equity_drawdown_episode_id: "equity drawdown",
+  canonical_symbol: "symbol", net_profit: "profit", open_time_utc: "opened (UTC)", close_time_utc: "closed (UTC)",
+  hold_minutes: "held (min)", magic: "EA (magic)", close_reason: "closed by", trade_count: "trades",
 };
+// the money result of a row; lists show it right after the id and add it up
+const PROFIT_COLS = ["net_profit", "net_pnl", "profit", "net"];
+const SUM_COLS = new Set([...PROFIT_COLS, "swap", "commission", "lots", "swap_total", "commission_total"]);
+const ID_COLS = ["position_id", "sequence_id", "episode_id"];
 const label = (c) => NAMES[c] || c.replaceAll("_", " ");
 const store = {
   key: (login) => `tq.chats.${login}`,
@@ -878,36 +891,94 @@ function botShell() {
   m.appendChild(b);
   return [m, b];
 }
+/* lists (one row per trade, basket or drawdown): the id first, then the profit, then the rest */
+function columnOrder(result) {
+  const all = result.columns.map((_, i) => i);
+  const first = all.filter((i) => ID_COLS.includes(result.columns[i]));
+  if (!first.length) return all;
+  const money = all.filter((i) => PROFIT_COLS.includes(result.columns[i]));
+  return [...first, ...money, ...all.filter((i) => !first.includes(i) && !money.includes(i))];
+}
+/* a column with the same value on every row says nothing per row: shown once above the table instead */
+function sameEverywhere(result, col) {
+  const i = result.columns.indexOf(col);
+  if (i < 0 || result.rows.length < 2) return null;
+  const v = result.rows[0][i];
+  return result.rows.every((r) => r[i] === v) ? v : null;
+}
+/* the totals of a list, over all its rows (also those not shown yet) */
+function listTotals(result) {
+  if (result.totals) return result.totals;  // kept from before a long list was trimmed for storage
+  const idCol = result.columns.find((c) => c === "position_id" || c === "sequence_id");
+  if (!idCol || result.rows.length < 2) return null;
+  const sums = {};
+  result.columns.forEach((c, i) => {
+    if (SUM_COLS.has(c)) sums[c] = result.rows.reduce((a, r) => a + (typeof r[i] === "number" ? r[i] : 0), 0);
+  });
+  if (!Object.keys(sums).length) return null;
+  const pi = result.columns.findIndex((c) => PROFIT_COLS.includes(c));
+  return { count: result.rows.length, noun: idCol === "sequence_id" ? "basket" : "trade", sums,
+           won: pi >= 0 ? result.rows.filter((r) => r[pi] > 0).length : null };
+}
 function renderTable(result, limit) {
   const wrap = el("div", { class: "table-wrap" });
+  const box = el("div");
+  const magic = sameEverywhere(result, "magic");
+  let order = columnOrder(result);
+  if (magic !== null) {
+    order = order.filter((i) => result.columns[i] !== "magic");
+    box.appendChild(el("div", { class: "table-note" }, magic === 0 ? "All manual trades" : `All by EA (magic) ${magic}`));
+  }
   const table = el("table");
   const head = el("tr");
-  result.columns.forEach((c) => head.appendChild(el("th", {}, label(c))));
+  order.forEach((i) => head.appendChild(el("th", {}, label(result.columns[i]))));
   table.appendChild(el("thead")).appendChild(head);
   const body = el("tbody");
   result.rows.slice(0, limit).forEach((row) => {
     const tr = el("tr");
-    row.forEach((v, i) => {
+    order.forEach((i) => {
+      const v = row[i];
       const num = typeof v === "number";
       const col = result.columns[i];
-      const td = el("td", { class: (num ? "num" : "") + (num && v < 0 ? " neg" : "") });
+      const money = PROFIT_COLS.includes(col);
+      const td = el("td", { class: (num ? "num" : "") + (num && v < 0 ? " neg" : "") + (num && money && v > 0 ? " pos" : "") });
       const kind = col === "position_id" ? "trade" : col === "sequence_id" ? "sequence" : null;
       if (kind && Number.isInteger(v)) {
         const noun = kind === "sequence" ? "basket" : kind;
         const link = el("button", { class: "id-link", type: "button", title: `Show this ${noun} on a price chart`,
-          "aria-label": `${noun} ${v}: show on a price chart` }, String(v));
+          "aria-label": `${noun} ${v}: show on a price chart` });
+        link.append(icon("candle", 13), el("span", {}, String(v)));
         link.addEventListener("click", () => openChart(kind, v));
         td.appendChild(link);
       } else {
-        td.textContent = cell(col, v, result.share_columns);
+        td.textContent = money && num && v > 0 ? "+" + cell(col, v, result.share_columns) : cell(col, v, result.share_columns);
       }
       tr.appendChild(td);
     });
     body.appendChild(tr);
   });
   table.appendChild(body);
+  const totals = listTotals(result);
+  if (totals) {
+    const tr = el("tr");
+    order.forEach((i, n) => {
+      const col = result.columns[i], s = totals.sums[col];
+      if (n === 0) { tr.appendChild(el("td", {}, "Total")); return; }
+      if (s === undefined) { tr.appendChild(el("td")); return; }
+      const money = PROFIT_COLS.includes(col);
+      tr.appendChild(el("td", { class: "num" + (s < 0 ? " neg" : money && s > 0 ? " pos" : "") },
+        (money && s > 0 ? "+" : "") + (/lot/.test(col) ? s.toFixed(2) : fmt2.format(s))));
+    });
+    table.appendChild(el("tfoot")).appendChild(tr);
+  }
   wrap.appendChild(table);
-  return wrap;
+  box.appendChild(wrap);
+  if (totals) {
+    const won = totals.won === null ? "" : ` · ${totals.won} in profit (${Math.round(totals.won / totals.count * 100)}%)`;
+    box.appendChild(el("div", { class: "table-note" },
+      `${totals.count} ${totals.noun}${totals.count === 1 ? "" : "s"}${won} · totals cover all rows`));
+  }
+  return box;
 }
 /* the labels on top of an answer: what was counted, and whether the numbers were checked */
 function checkChip(data) {
@@ -933,8 +1004,10 @@ function scopeLine(data) {
 function headlineNode(h, r) {
   const loss = /drawdown|depth/.test(h.column);  // drawdowns are stored as positive depths
   const bad = loss ? h.value > 0 : h.value < 0;
+  const gain = PROFIT_COLS.includes(h.column) && h.value > 0;
   const box = el("div", { class: "headline" });
-  box.append(el("div", { class: "hv" + (bad ? " neg" : "") }, (loss && h.value > 0 ? "-" : "") + cell(h.column, h.value, r.share_columns)),
+  box.append(el("div", { class: "hv" + (bad ? " neg" : gain ? " pos" : "") },
+      (loss && h.value > 0 ? "-" : gain ? "+" : "") + cell(h.column, h.value, r.share_columns)),
     el("div", { class: "hl" }, label(h.column)));
   return box;
 }
@@ -1110,7 +1183,7 @@ function ensureChat(firstQuestion) {
   return chat;
 }
 function trimResult(r) {
-  return !r || r.rows.length <= 100 ? r : { ...r, rows: r.rows.slice(0, 100), truncated: true };
+  return !r || r.rows.length <= 100 ? r : { ...r, rows: r.rows.slice(0, 100), truncated: true, totals: listTotals(r) };
 }
 function trimForStorage(data) {
   return { ...data, result: trimResult(data.result),
@@ -1124,7 +1197,8 @@ async function send(question, request) {
   if (chat.messages.length === 0) renderThread();
   chat.messages.push({ role: "user", text: question });
   const t = $("thread");
-  t.appendChild(userMessage(question));
+  const asked = userMessage(question);
+  t.appendChild(asked);
   const [box, bubble] = botShell();
   const typing = el("div", { class: "thinking", role: "status" });
   const stageLine = el("div", { class: "t" }, "Reading your trades…");
@@ -1156,11 +1230,26 @@ async function send(question, request) {
     if (data.session_id) chat.sessionId = data.session_id;
     if (data.focus) chat.focus = data.focus;
   } catch (error) {
-    data = { error: error.message, result: null, text: null };
+    data = { error: friendlyError(error.message), result: null, text: null };
   }
   typing.remove();
   renderAnswer(bubble, data);
-  chat.messages.push({ role: "bot", data: trimForStorage(data) });
+  if (data.error && !data.result && !data.text) {  // nothing came back: offer the same question again
+    const again = el("button", { class: "retry-btn", type: "button" }, "Retry");
+    again.addEventListener("click", () => {
+      if (state.busy) return;
+      asked.remove(); box.remove();
+      const at = chat.messages.indexOf(entry);
+      if (at > 0) chat.messages.splice(at - 1, 2);  // the failed question and its error
+      store.save(state.login, state.chats);
+      state.chatId = chat.id;
+      renderHistory();
+      send(question, request);
+    });
+    bubble.appendChild(again);
+  }
+  const entry = { role: "bot", data: trimForStorage(data) };
+  chat.messages.push(entry);
   store.save(state.login, state.chats);
   renderFocus();
   box.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1168,13 +1257,24 @@ async function send(question, request) {
   state.busy = false;
   updateSend();
 }
+/* browser and server errors in plain words */
+function friendlyError(message) {
+  if (/failed to fetch|networkerror|load failed|network error|network connection/i.test(message || ""))
+    return "Can't reach TradeQuery right now. Check that it's running and the computer is awake, then press Retry.";
+  if (/^Request failed \(5\d\d\)/.test(message || ""))
+    return "TradeQuery had a problem answering that. Press Retry; if it keeps happening, restart TradeQuery.";
+  return message;
+}
 async function refreshUsage() {
   try {
     const u = await api("/api/usage");
     const tokens = u.input_tokens + u.output_tokens;
-    const calls = `Today: ${u.requests}${u.request_limit ? " of " + u.request_limit : ""} AI calls`;
-    const toks = `${Math.round(tokens / 1000)}k${u.token_limit ? " of " + Math.round(u.token_limit / 1000) + "k" : ""} tokens`;
-    $("usageLine").textContent = `${calls} · ${toks}`;
+    const left = u.request_limit ? Math.max(0, u.request_limit - u.requests) : null;
+    $("usageLine").textContent = left === null ? `AI used today: ${u.requests} calls`
+      : `AI today: ${left} calls left (~${Math.floor(left / 2)} questions)`;
+    $("usageLine").title = `AI use today (UTC): ${u.requests}${u.request_limit ? " of " + u.request_limit : ""} calls, `
+      + `${Math.round(tokens / 1000)}k${u.token_limit ? " of " + Math.round(u.token_limit / 1000) + "k" : ""} tokens. `
+      + "A question uses 1–2 calls, smart mode about 3. Suggested questions and the calendar use none.";
   } catch { $("usageLine").textContent = ""; }
 }
 function askPreset(p) {
@@ -1367,7 +1467,9 @@ async function start() {
   try {
     [state.accounts, state.presets] = await Promise.all([api("/api/accounts"), api("/api/presets")]);
   } catch (error) {
-    $("thread").replaceChildren(el("div", { class: "error" }, "Could not reach TradeQuery: " + error.message));
+    const again = el("button", { class: "retry-btn", type: "button" }, "Retry");
+    again.addEventListener("click", () => location.reload());
+    $("thread").replaceChildren(el("div", { class: "error" }, friendlyError(error.message)), again);
     return;
   }
   pollSync();

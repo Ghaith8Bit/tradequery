@@ -155,11 +155,20 @@ def headline(spec: QuerySpec, result: Result, question: str = "") -> dict | None
     numeric = [c for c, v in row.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
                and not c.endswith("_id") and c not in ("is_win", "news_overlap")]
     asked = [c for c in focus_columns(question) if c in numeric]
-    preferred = (asked + [m for m in spec.metrics if m in numeric] + [c for c in HEADLINE_COLUMNS if c in numeric]
-                 + numeric)
+    # a count is rarely the point ("how did I do?" is about the result, not "403 trades"), unless it was asked for
+    metrics = sorted((m for m in spec.metrics if m in numeric), key=lambda c: (_is_count(c), c not in RESULT_COLUMNS))
+    preferred = asked + metrics + [c for c in HEADLINE_COLUMNS if c in numeric] + sorted(numeric, key=_is_count)
     if not preferred:
         return None
     return {"column": preferred[0], "value": row[preferred[0]]}
+
+
+# the money result, which leads when several metrics were asked for together
+RESULT_COLUMNS = ("net_profit", "net_pnl", "net")
+
+
+def _is_count(column: str) -> bool:
+    return column in ("count", "n") or column.endswith("_count")
 
 
 def _again(question: str, how: str) -> str:
